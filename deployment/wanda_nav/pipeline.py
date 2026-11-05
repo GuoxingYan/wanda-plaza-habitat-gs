@@ -54,6 +54,7 @@ def run_one(args, config, render_sim=None):
     report.update(navmesh=str(navmesh_path.resolve()), navigable_area_m2=float(pathfinder.navigable_area),
                   num_islands=int(pathfinder.num_islands), largest_island=largest_island, route_island=island,
                   largest_island_area_m2=float(pathfinder.island_area(largest_island)),
+                  all_island_areas_m2=[float(pathfinder.island_area(i)) for i in range(pathfinder.num_islands)],
                   bounds=[np.asarray(x).tolist() for x in pathfinder.get_bounds()],
                   navmesh_settings={"cell_size_m": nav["cell_size_m"], "cell_height_m": nav["cell_height_m"],
                                     "agent_width_m": nav["agent_width_m"], "agent_radius_m": nav["agent_width_m"] / 2,

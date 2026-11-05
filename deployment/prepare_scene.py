@@ -33,7 +33,11 @@ def main():
     ap.add_argument("--input", type=Path, default=Path("/data/projects/CloudRobo/Wanda Plaza"))
     ap.add_argument("--out", type=Path, default=Path("/data/projects/CloudRobo/deployment/scene_crop"))
     ap.add_argument("--crop", type=float, nargs=4, metavar=("XMIN", "XMAX", "YMIN", "YMAX"), default=[-50, 10, -40, 20])
+    ap.add_argument("--gaussian-stride", type=int, default=1,
+                    help="保留每隔多少个 Gaussian；1 保留全部，值越大越省内存但画质越差")
     args = ap.parse_args(); args.out.mkdir(parents=True, exist_ok=True)
+    if args.gaussian_stride < 1:
+        raise ValueError("--gaussian-stride 必须为正整数")
     xmin, xmax, ymin, ymax = args.crop
 
     lines, off = header(args.input / "mesh.ply")
@@ -66,6 +70,11 @@ def main():
     data = np.memmap(args.input / "point_cloud.ply", mode="r", offset=off, dtype="<f4", shape=(ng, len(props)))
     # Gaussian 中心复用完全相同的四个边界参数。
     gs_keep = ((data[:, 0] >= xmin) & (data[:, 0] <= xmax) & (data[:, 1] >= ymin) & (data[:, 1] <= ymax))
+    if args.gaussian_stride > 1:
+        # 固定步长抽样只用于资源受限的预览；默认 stride=1，避免静默损失细节。
+        selected = np.flatnonzero(gs_keep)
+        gs_keep[:] = False
+        gs_keep[selected[::args.gaussian_stride]] = True
     count = int(np.count_nonzero(gs_keep)); dirs = np.random.default_rng(3).normal(size=(200, 3)); dirs /= np.linalg.norm(dirs, axis=1)[:, None]
     T = np.linalg.lstsq(basis(dirs @ R.T), basis(dirs), rcond=None)[0]
     sh_error = float(np.max(abs(basis(dirs @ R.T) @ T - basis(dirs)))); assert sh_error < 1e-12; T[np.abs(T) < 1e-12] = 0
@@ -86,7 +95,8 @@ def main():
     meta = {"source": str(args.input.resolve()), "crop_source_xyz": {"x": [xmin, xmax], "y": [ymin, ymax], "z": None},
         "crop_rule": "same XY bounds; mesh faces require all 3 vertices inside", "input_mesh_vertices": nv,
         "input_mesh_triangles": nf, "mesh_vertices": len(used), "mesh_triangles": len(out_faces),
-        "input_gaussians": ng, "output_gaussians": count, "transform_source_to_habitat": R.tolist(), "sh_rotation_max_error": sh_error}
+        "input_gaussians": ng, "output_gaussians": count, "gaussian_stride": args.gaussian_stride,
+        "transform_source_to_habitat": R.tolist(), "sh_rotation_max_error": sh_error}
     (args.out / "preparation.json").write_text(json.dumps(meta, indent=2))
     stage = {"render_asset": str(target), "collision_asset": str(mesh), "up": [0, 1, 0], "front": [0, 0, -1], "units_to_meters": 1.0, "requires_lighting": False}
     (args.out / "wanda.stage_config.json").write_text(json.dumps(stage, indent=2)); print(json.dumps(meta, indent=2), flush=True)
