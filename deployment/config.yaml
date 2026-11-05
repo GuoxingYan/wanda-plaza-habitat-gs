@@ -1,0 +1,94 @@
+# Habitat-GS 室外导航验证配置。数值单位均为米、秒、度或弧度，除非字段另有说明。
+scene:
+  # 裁剪场景目录；其中应包含同规格裁剪的 mesh、Gaussian PLY 和 stage 配置。
+  directory: deployment/scene_crop
+  # true 时从碰撞 mesh 重新烘焙并覆盖 NavMesh；false 时复用已有 NavMesh。
+  bake_navmesh: true
+
+navmesh:
+  # Recast 水平栅格边长；越小越精细，但烘焙更慢、内存占用更高。
+  cell_size_m: 0.1
+  # Recast 垂直栅格高度；影响台阶和地面高度表达精度。
+  cell_height_m: 0.05
+  # 机器人/行人代理总宽度；半径由宽度的一半计算，用于墙边安全距离。
+  agent_width_m: 0.5
+  # 代理碰撞高度；低于此高度的空间会被判为不可通行。
+  agent_height_m: 1.5
+  # 可跨越的最大垂直台阶高度。
+  max_climb_m: 0.2
+  # 可行走表面的最大坡度角。
+  max_slope_deg: 35.0
+  # 可行走边缘允许的最大误差（米）；0 使用 Habitat/Recast 默认值。
+  edge_max_error_m: 0.0
+
+navigation:
+  # 固定随机种子，保证随机选取路线可复现。
+  seed: 17
+  # 最短路径允许的最小测地距离（米）。
+  min_route_length_m: 15.0
+  # 最短路径允许的最大测地距离（米）。
+  max_route_length_m: 100.0
+  # 随机起终点采样的最大尝试次数。
+  sample_attempts: 150
+  # 可选连通岛编号；null 时按面积和估计尺度自动选择适合目标路线长度的岛。
+  island_index: null
+  # 选定岛的最小面积（平方米），过滤过小、难以形成目标路线的孤立区域。
+  min_island_area_m2: 10.0
+  # 可选起点/终点，使用 Habitat Y-up 世界坐标 [x,y,z]；null 表示按可行走岛和三角面面积加权选取。
+  start: null
+  # 可选终点，坐标约定同 start；必须与 start 同时设置或同时留空。
+  goal: null
+
+motion:
+  # 代理沿最短路径的最大前进速度（米/秒），会受 NavMesh try_step 约束。
+  linear_speed_mps: 0.5
+  # 朝向调整的最大角速度（弧度/秒），相邻输出帧的 yaw 变化不会超过此上限。
+  angular_speed_radps: 1.2
+  # 输出视频帧率；它也定义每帧模拟时间步长 dt=1/fps。
+  fps: 10
+  # RGB 相机安装高度（米），相对于代理地面位置。
+  camera_height_m: 1.5
+
+camera:
+  # D435 RGB 传感器图像宽度（像素）。
+  width: 640
+  # D435 RGB 传感器图像高度（像素）。
+  height: 360
+  # D435 RGB 标称水平视场角；这是理想针孔近似值，不替代逐机标定。
+  hfov_deg: 69.0
+  # 相机近裁剪平面（米），小于此距离的物体不渲染。
+  near_m: 0.05
+  # 相机远裁剪平面（米），大于此距离的物体不渲染。
+  far_m: 500.0
+
+output:
+  # 是否写入导航 RGB MP4 视频。
+  video: true
+  # 是否写入包含起终点和所有逐帧相机位姿的 JSON 文件。
+  poses_json: true
+  # 是否写入 NavMesh、轨迹、起终点俯视图。
+  trajectory_topdown: true
+  # 是否写入彩色 mesh 顶视图与 NavMesh 的半透明叠加图。
+  mesh_navmesh_overlay: true
+  # 是否额外保存首帧、中间帧、末帧 RGB PNG。
+  rgb_keyframes: true
+  # 点云顶视图最大绘制采样点数；超大 mesh 会用固定种子均匀抽样。
+  mesh_max_points: 500000
+
+# 批量生成控制：每条路线分别输出视频、JSON 和俯视图。
+generation:
+  # 要生成的导航轨迹条数；每条使用 seed + 条目索引，输出到 route_0000 等目录。
+  trajectory_count: 1
+
+# 俯视图绘制参数，改变外观不会改变碰撞几何或导航结果。
+visualization:
+  # 输出图片每英寸像素数；越大图片越清晰、文件越大。
+  dpi: 160
+  # NavMesh 半透明覆盖层的不透明度，范围 [0,1]。
+  navmesh_alpha: 0.32
+  # NavMesh 覆盖颜色，使用 HTML 十六进制颜色。
+  navmesh_color: '#2b9d57'
+  # 轨迹线颜色。
+  trajectory_color: '#d62728'
+  # 轨迹线宽，单位为绘图点。
+  trajectory_linewidth: 1.7

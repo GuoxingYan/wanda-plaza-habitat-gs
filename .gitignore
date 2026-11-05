@@ -6,6 +6,7 @@ deployment/scene_crop/
 deployment/results_crop/*.mp4
 deployment/results_crop/*.npy
 deployment/results_crop/*.png
+deployment/results_crop/*.json
 
 # 编译、下载缓存和运行日志
 habitat-gs/build/
@@ -25,3 +26,4 @@ __pycache__/
 
 # 本地仓库元数据
 .git/
+deployment/results_crop/route_*/
