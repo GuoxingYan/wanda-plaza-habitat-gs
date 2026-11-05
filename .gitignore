@@ -1,0 +1,27 @@
+# 原始场景与生成资产：体积很大，不能提交到代码仓库
+Wanda Plaza
+habitat-gs
+deployment/scene/
+deployment/scene_crop/
+deployment/results_crop/*.mp4
+deployment/results_crop/*.npy
+deployment/results_crop/*.png
+
+# 编译、下载缓存和运行日志
+habitat-gs/build/
+habitat-gs/src/deps/*
+!habitat-gs/src/deps/.gitkeep
+deployment/logs/
+deployment/*.tar.gz
+deployment/system-deps/
+deployment/__pycache__/
+
+# Python 与编辑器文件
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.vscode/
+.idea/
+
+# 本地仓库元数据
+.git/

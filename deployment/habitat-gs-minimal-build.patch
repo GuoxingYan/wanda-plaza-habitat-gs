@@ -1,0 +1,20 @@
+diff --git a/src/cmake/dependencies.cmake b/src/cmake/dependencies.cmake
+index 127d1d3..85bafbb 100644
+--- a/src/cmake/dependencies.cmake
++++ b/src/cmake/dependencies.cmake
+@@ -356,12 +356,14 @@ if(NOT USE_SYSTEM_MAGNUM)
+       Magnum::AnyImageConverter
+       Magnum::AnyImageImporter
+       Magnum::AnySceneImporter
+-      MagnumPlugins::AssimpImporter
+       MagnumPlugins::BasisImporter
+       MagnumPlugins::GltfImporter
+       MagnumPlugins::StbImageConverter
+       MagnumPlugins::StbImageImporter
+     )
++    if(BUILD_ASSIMP_SUPPORT)
++      list(APPEND common_plugins MagnumPlugins::AssimpImporter)
++    endif()
+     if(BUILD_GUI_VIEWERS)
+       set(MAGNUM_PYTHON_BINDINGS_STATIC_PLUGINS ${common_plugins}
+                                                 MagnumPlugins::StbTrueTypeFont

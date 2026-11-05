@@ -1,0 +1,86 @@
+{
+  "navmesh": "/data/projects/CloudRobo/deployment/scene_crop/wanda_crop.navmesh",
+  "navigable_area_m2": 771.7637329101562,
+  "num_islands": 4,
+  "largest_island": 0,
+  "largest_island_area_m2": 575.4892578125,
+  "bounds": [
+    [
+      -49.998661041259766,
+      9.872824668884277,
+      -19.999874114990234
+    ],
+    [
+      9.99938678741455,
+      30.46329116821289,
+      39.999149322509766
+    ]
+  ],
+  "agent_radius_m": 0.25,
+  "agent_height_m": 1.5,
+  "geodesic_distance_m": 30.458465576171875,
+  "navigation_steps": 119,
+  "goal_error_m": 0.0,
+  "all_steps_navigable": true,
+  "rgb_frames": 120,
+  "render_mean_seconds": 0.006398509833297794,
+  "rgb_std_median": 35.732230172430505,
+  "camera": {
+    "model": "D435 RGB nominal pinhole",
+    "width": 640,
+    "height": 360,
+    "hfov_deg": 69,
+    "fx": 465.60288917518244,
+    "fy": 465.60288917518244,
+    "cx": 319.5,
+    "cy": 179.5,
+    "height_m": 1.5,
+    "note": "Nominal RGB FoV, not physical-device calibrated intrinsics; no lens distortion."
+  },
+  "environment": {
+    "habitat_gs_version": "0.3.3",
+    "cuda_enabled": true,
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "cuda_toolkit": "12.4",
+    "conda_env": "cloudrobo-habitat-gs"
+  },
+  "preparation": {
+    "source": "/data/data/Wanda Plaza",
+    "crop_source_xyz": {
+      "x": [
+        -50,
+        10
+      ],
+      "y": [
+        -40,
+        20
+      ],
+      "z": null
+    },
+    "crop_rule": "same XY bounds; mesh faces require all 3 vertices inside",
+    "input_mesh_vertices": 9803019,
+    "input_mesh_triangles": 11479664,
+    "mesh_vertices": 1069029,
+    "mesh_triangles": 1284922,
+    "input_gaussians": 35225246,
+    "output_gaussians": 870725,
+    "transform_source_to_habitat": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        -1.0,
+        0.0
+      ]
+    ],
+    "sh_rotation_max_error": 1.2212453270876722e-15
+  }
+}
