@@ -22,7 +22,13 @@ def topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, isl
         ax.legend(); ax.autoscale(); fig.tight_layout()
         fig.savefig(output_dir / "trajectory_topdown.png", dpi=config["visualization"]["dpi"]); plt.close(fig)
     if config["output"]["mesh_navmesh_overlay"]:
-        mesh = PlyData.read(str(scene_dir / "wanda_crop_mesh_yup.ply"))["vertex"].data
+        import json
+        from pathlib import Path
+        stage = json.loads((scene_dir / "wanda.stage_config.json").read_text(encoding="utf-8"))
+        mesh_path = Path(stage["collision_asset"])
+        if not mesh_path.is_absolute():
+            mesh_path = scene_dir / mesh_path
+        mesh = PlyData.read(str(mesh_path))["vertex"].data
         coords = np.column_stack([mesh["x"], mesh["z"]])
         colors = np.column_stack([mesh["red"], mesh["green"], mesh["blue"]]).astype(np.float32) / 255.0
         limit = config["output"]["mesh_max_points"]

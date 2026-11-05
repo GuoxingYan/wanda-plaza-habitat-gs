@@ -122,20 +122,26 @@ def build_motion(pathfinder, points, config):
         for _ in range(turns):
             yaw += angle / turns
             frames.append((position.copy(), yaw, len(frames) * dt))
-        distance = np.linalg.norm(target - position)
-        steps = max(1, int(math.ceil(distance / (max_step * 0.9))))
-        origin = position.copy()
-        for step in range(1, steps + 1):
-            wanted = origin + (target - origin) * (step / steps)
+        remaining = float(np.linalg.norm(target - position))
+        # 以小于速度上限的增量推进；发生投影时保留实际位置，不跨越障碍物强行吸附。
+        while remaining > 0.03:
+            delta = target - position
+            distance = float(np.linalg.norm(delta))
+            increment = min(max_step * 0.8, distance)
+            wanted = position + delta * (increment / distance)
             actual = np.asarray(pathfinder.try_step(position.astype(np.float32), wanted.astype(np.float32)), dtype=np.float64)
-            if np.linalg.norm(actual - wanted) > 0.15:
-                raise RuntimeError("NavMesh 阻挡规划轨迹，拒绝输出穿障碍路线")
+            moved = float(np.linalg.norm(actual - position))
+            if moved < 1e-4:
+                raise RuntimeError("NavMesh 阻挡路径推进；此路线不适合当前代理宽度")
+            if moved > max_step + 1e-6:
+                raise RuntimeError("NavMesh 单步投影超过速度上限")
             if not pathfinder.is_navigable(actual.astype(np.float32), 0.15):
                 raise RuntimeError("移动点离开 NavMesh")
-            if np.linalg.norm(actual - position) > max_step + 1e-6:
-                raise RuntimeError("NavMesh 投影导致速度超限，请减小 cell_height_m 后重新烘焙")
             position = actual
             frames.append((position.copy(), yaw, len(frames) * dt))
+            remaining = float(np.linalg.norm(target - position))
+            if len(frames) > 200000:
+                raise RuntimeError("路线推进超过安全帧数上限")
     return frames
 
 

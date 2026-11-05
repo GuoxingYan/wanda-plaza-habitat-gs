@@ -27,3 +27,6 @@ __pycache__/
 # 本地仓库元数据
 .git/
 deployment/results_crop/route_*/
+
+deployment/results_full/
+deployment/results_full_preview/

@@ -2,6 +2,7 @@
 import json
 import math
 import time
+from pathlib import Path
 
 import habitat_sim as hs
 import imageio.v2 as imageio
@@ -13,11 +14,15 @@ from .planning import build_motion, choose_route, quaternion_xyzw, resolve_path,
 from .visualization import topdown_plots
 
 
-def run_one(args, config):
+def run_one(args, config, render_sim=None):
     scene_dir = args.scene_dir or resolve_path(config["scene"]["directory"])
     output_dir = args.output
     output_dir.mkdir(parents=True, exist_ok=True)
-    navmesh_path = scene_dir / "wanda_crop.navmesh"
+    stage_config = json.loads((scene_dir / "wanda.stage_config.json").read_text(encoding="utf-8"))
+    collision_mesh = Path(stage_config["collision_asset"])
+    if not collision_mesh.is_absolute():
+        collision_mesh = scene_dir / collision_mesh
+    navmesh_path = scene_dir / "wanda.navmesh"
     report = {"config_file": str(args.config.resolve()), "scene_dir": str(scene_dir.resolve())}
 
     settings = hs.NavMeshSettings(); settings.set_defaults()
@@ -29,7 +34,7 @@ def run_one(args, config):
         settings.edge_max_error = nav["edge_max_error_m"]
     if config["scene"]["bake_navmesh"] and not args.skip_bake:
         simulator_cfg = hs.SimulatorConfiguration()
-        simulator_cfg.scene_id = str(scene_dir / "wanda_crop_mesh_yup.ply")
+        simulator_cfg.scene_id = str(collision_mesh)
         simulator_cfg.create_renderer = False; simulator_cfg.load_semantic_mesh = False
         with hs.Simulator(hs.Configuration(simulator_cfg, [hs.agent.AgentConfiguration()])) as sim:
             start_time = time.time()
@@ -72,7 +77,13 @@ def run_one(args, config):
         agent = hs.agent.AgentConfiguration(); agent.sensor_specifications = [sensor]
         render_times, image_stds, frame_records = [], [], []
         video_path = output_dir / "navigation_rgb.mp4"
-        with hs.Simulator(hs.Configuration(simulator_cfg, [agent])) as sim:
+        if render_sim is None:
+            sim = hs.Simulator(hs.Configuration(simulator_cfg, [agent]))
+            owns_simulator = True
+        else:
+            sim = render_sim
+            owns_simulator = False
+        try:
             assert sim.pathfinder.load_nav_mesh(str(navmesh_path)); assert hs.cuda_enabled, "CUDA disabled"
             writer_context = (imageio.get_writer(str(video_path), fps=config["motion"]["fps"], macro_block_size=2)
                               if config["output"]["video"] else None)
@@ -99,6 +110,9 @@ def run_one(args, config):
             finally:
                 if writer_context:
                     writer_context.close()
+        finally:
+            if owns_simulator:
+                sim.close()
         assert np.median(image_stds) > 10, "RGB frames have little variation"
         report.update(rgb_frames=len(render_times), render_mean_seconds=float(np.mean(render_times)),
                       rgb_std_median=float(np.median(image_stds)),
