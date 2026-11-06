@@ -53,7 +53,29 @@ def main():
     sensor.near = config['camera']['near_m']
     sensor.far = config['camera']['far_m']
     agent = hs.agent.AgentConfiguration()
-    agent.sensor_specifications = [sensor]
+    sensors = [sensor]
+    if config['output'].get('gaussian_navmesh_overlay', False) and not args.bake_only:
+        import numpy as np
+        # 使用 NavMesh 世界范围和最高点设置整批共用的高空俯视传感器。
+        scene_pathfinder = hs.PathFinder()
+        if not scene_pathfinder.load_nav_mesh(str(scene_dir / 'wanda.navmesh')):
+            raise RuntimeError(f"无法为俯视相机读取 NavMesh: {scene_dir / 'wanda.navmesh'}")
+        bounds = np.asarray(scene_pathfinder.get_bounds(), dtype=np.float32)
+        xmin, zmin = bounds[0, 0], bounds[0, 2]
+        xmax, zmax = bounds[1, 0], bounds[1, 2]
+        top_y = float(bounds[1, 1] + config['visualization']['gaussian_topdown_height_m'])
+        width = int(config['visualization']['image_width_px'])
+        height = int(config['visualization']['image_height_px'])
+        span = max(float(xmax-xmin), float(zmax-zmin) * width / height) * 1.10
+        focal = width * (top_y-float(bounds[1, 1])) / span
+        topdown = hs.CameraSensorSpec()
+        topdown.uuid = 'topdown_rgb'; topdown.sensor_type = hs.SensorType.COLOR
+        topdown.resolution = [height, width]; topdown.position = [0.0, 0.0, 0.0]
+        topdown.orientation = [-float(np.pi/2), 0.0, 0.0]
+        topdown.hfov = float(np.degrees(2*np.arctan(width/(2*focal))))
+        topdown.near = config['camera']['near_m']; topdown.far = top_y-float(bounds[0,1])+100.0
+        sensors.append(topdown)
+    agent.sensor_specifications = sensors
     pending = []
     for index in range(count):
         current = copy.deepcopy(config)
@@ -67,6 +89,8 @@ def main():
         report = json.loads(done_file.read_text()) if done_file.exists() else {}
         required = ['validation.json', 'navigation_rgb.mp4', 'navigation_poses.json',
                     'trajectory_topdown.png', 'mesh_navmesh_topdown.png']
+        if current['output'].get('gaussian_navmesh_overlay', False):
+            required.extend(['gaussian_topdown_raw.png', 'gaussian_navmesh_topdown.png'])
         if (not args.force and not (run_args.output / 'failure.json').exists()
                 and report.get('rgb_frames', 0) > 0
                 and report.get('config') == current
@@ -106,7 +130,8 @@ def refresh_visualizations(args, config):
     import habitat_sim as hs
     import magnum as mn
     from PIL import Image
-    from .visualization import topdown_plots, save_gaussian_navmesh_overlay
+    from .visualization import (topdown_plots, save_gaussian_navmesh_overlay,
+                                project_navmesh_to_topdown_pixels)
 
     scene_dir = args.scene_dir or resolve_path(config['scene']['directory'])
     stage = json.loads((scene_dir / 'wanda.stage_config.json').read_text(encoding='utf-8'))
@@ -134,26 +159,32 @@ def refresh_visualizations(args, config):
             continue
         path = np.load(path_file)
         trajectory = np.load(trajectory_file)
+        route_config = config
+        config_path = output_dir / 'effective_config.yaml'
+        if config_path.exists():
+            with config_path.open(encoding='utf-8') as stream:
+                route_config = yaml.safe_load(stream)
         frames = [(point, 0.0, index / config['motion']['fps']) for index, point in enumerate(trajectory)]
         island = int(pathfinder.get_island(path[0]))
-        topdown_plots(pathfinder, path, frames, scene_dir, output_dir, config, island)
+        topdown_plots(pathfinder, path, frames, scene_dir, output_dir, route_config, island)
 
-        if config['output'].get('gaussian_navmesh_overlay', False):
-            sensor = hs.CameraSensorSpec()
-            sensor.uuid = 'rgb'
-            sensor.sensor_type = hs.SensorType.COLOR
-            sensor.resolution = [config['visualization']['image_height_px'],
-                                 config['visualization']['image_width_px']]
-            sensor.position = [0.0, 0.0, 0.0]
-            sensor.orientation = [float(-np.pi / 2), 0.0, 0.0]
-            top_y = float(scene_bounds[1, 1] + config['visualization']['gaussian_topdown_height_m'])
-            width, height = sensor.resolution[1], sensor.resolution[0]
+        if route_config['output'].get('gaussian_navmesh_overlay', False):
+            width = int(route_config['visualization']['image_width_px'])
+            height = int(route_config['visualization']['image_height_px'])
+            top_y = float(scene_bounds[1, 1] + route_config['visualization']['gaussian_topdown_height_m'])
             span = max(float(xmax-xmin), float(zmax-zmin) * width / height) * 1.10
-            focal = width * (top_y - float(scene_bounds[1, 1])) / span
-            sensor.hfov = float(np.degrees(2 * np.arctan(width / (2 * focal))))
-            sensor.far = top_y - float(scene_bounds[0, 1]) + 100.0
+            focal = width * (top_y-float(scene_bounds[1, 1])) / span
+            topdown = hs.CameraSensorSpec()
+            topdown.uuid = 'topdown_rgb'
+            topdown.sensor_type = hs.SensorType.COLOR
+            topdown.resolution = [height, width]
+            topdown.position = [0.0, 0.0, 0.0]
+            topdown.orientation = [-float(np.pi / 2), 0.0, 0.0]
+            topdown.hfov = float(np.degrees(2 * np.arctan(width / (2 * focal))))
+            topdown.near = route_config['camera']['near_m']
+            topdown.far = top_y-float(scene_bounds[0,1])+100.0
             agent = hs.agent.AgentConfiguration()
-            agent.sensor_specifications = [sensor]
+            agent.sensor_specifications = [topdown]
             sim_cfg = hs.SimulatorConfiguration()
             sim_cfg.scene_id = str((scene_dir / 'wanda.stage_config.json').resolve())
             sim_cfg.enable_physics = False
@@ -161,22 +192,18 @@ def refresh_visualizations(args, config):
             sim_cfg.gpu_device_id = 0
             with hs.Simulator(hs.Configuration(sim_cfg, [agent])) as sim:
                 state = hs.AgentState()
-                top_y = float(scene_bounds[1, 1] + config['visualization']['gaussian_topdown_height_m'])
-                state.position = mn.Vector3(float((xmin + xmax) / 2), top_y, float((zmin + zmax) / 2))
-                from habitat_sim.utils.common import quat_from_angle_axis
-                state.rotation = quat_from_angle_axis(0.0, np.array([0, 1, 0]))
+                state.position = mn.Vector3(float((xmin+xmax)/2), top_y, float((zmin+zmax)/2))
+                state.rotation = hs.utils.common.quat_from_angle_axis(0.0, np.array([0, 1, 0]))
                 sim.initialize_agent(0, state)
-                rgb = sim.get_sensor_observations()['rgb'][:, :, :3]
-                Image.fromarray(rgb).save(output_dir / 'gaussian_topdown_raw.png')
-            # 对每个三维顶点做透视投影，不能用平面 extent 假装正射图。
+                rgb = sim.get_sensor_observations()['topdown_rgb'][:, :, :3]
+            Image.fromarray(rgb).save(output_dir / 'gaussian_topdown_raw.png')
+            # Habitat 的相机俯视时，相机画面上方对应世界 +Z；图像第 0 行在上。
             projected = []
             for idx, tri in triangles_by_island:
-                pixels = tri.copy()
-                depth = top_y - tri[..., 1]
-                pixels[..., 0] = focal * (tri[..., 0] - (xmin+xmax)/2) / depth + (width-1)/2
-                pixels[..., 2] = focal * (tri[..., 2] - (zmin+zmax)/2) / depth + (height-1)/2
+                pixels = project_navmesh_to_topdown_pixels(
+                    tri, top_y, focal, (xmin+xmax)/2, (zmin+zmax)/2, width, height)
                 projected.append((idx, pixels))
             save_gaussian_navmesh_overlay(rgb, projected,
                                           (-0.5, width-0.5, -0.5, height-0.5),
-                                          output_dir / 'gaussian_navmesh_topdown.png', config)
+                                          output_dir / 'gaussian_navmesh_topdown.png', route_config)
         print(f'Refreshed visualizations: {output_dir}', flush=True)

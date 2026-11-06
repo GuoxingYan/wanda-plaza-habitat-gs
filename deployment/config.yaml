@@ -24,6 +24,14 @@ navmesh:
 navigation:
   # 固定随机种子，保证随机选取路线可复现。
   seed: 17
+  # 是否使用 cameras.json 采集相机中心轨迹作为可行区域先验；开启时 NavMesh 路径必须位于缓冲区内。
+  use_camera_trajectory_prior: true
+  # 原始相机中心轨迹 JSON；相对路径按项目根目录解析，位置统一转换为 Habitat X/Y/Z。
+  camera_trajectory_file: Wanda Plaza/cameras.json
+  # 采集轨迹周围允许导航的平面距离（米）；轨迹缓冲区以 X/Z 平面计算。
+  camera_trajectory_buffer_m: 10.0
+  # 起点/终点优先从采集相机中心位置投影到 NavMesh 后选取；false 时只用三角面面积加权采样。
+  prefer_camera_trajectory_endpoints: true
   # 最短路径允许的最小测地距离（米）。
   min_route_length_m: 15.0
   # 最短路径允许的最大测地距离（米）。
@@ -70,8 +78,8 @@ output:
   trajectory_topdown: true
   # 是否写入彩色 mesh 顶视图与 NavMesh 的半透明叠加图。
   mesh_navmesh_overlay: true
-  # --visualize-only 时生成真实 Habitat-GS 俯视渲染与逐顶点投影 NavMesh 叠加图。
-  gaussian_navmesh_overlay: true
+  # 是否生成真实 Habitat-GS 俯视渲染与逐顶点投影 NavMesh 叠加图；高分辨率额外渲染开销较大。
+  gaussian_navmesh_overlay: false
   # 是否额外保存首帧、中间帧、末帧 RGB PNG。
   rgb_keyframes: true
   # mesh 顶视颜色底图的最大输入顶点数；null 表示使用全部顶点。

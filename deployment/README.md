@@ -2,21 +2,25 @@
 
 独立 Conda 环境：`cloudrobo-habitat-gs`，Python 3.12，CUDA toolkit 12.4，RTX 3090。
 
+首次阅读建议从本文件开始；参数及图像判读见 [VISUALIZATION.md](VISUALIZATION.md)，逐次代码变更见 [CHANGELOG.md](CHANGELOG.md)。原始数据位于 `Wanda Plaza/`，该目录被 Git 忽略。
+
 ## 参数化运行
 
 ```bash
 cd /data/projects/CloudRobo
 conda activate cloudrobo-habitat-gs
-./deployment/run_validation.sh
+bash deployment/run_validation.sh
 # 已有 NavMesh 时跳过烘焙
-./deployment/run_validation.sh --skip-bake
+bash deployment/run_validation.sh --skip-bake
 # 只生成 NavMesh 并验证路径移动
-./deployment/run_validation.sh --bake-only
+bash deployment/run_validation.sh --bake-only
 # 指定 YAML 配置、场景或输出目录
-./deployment/run_validation.sh --config deployment/config.yaml --scene-dir deployment/scene --output deployment/results_full
+bash deployment/run_validation.sh --config deployment/config.yaml --scene-dir deployment/scene --output deployment/results_full
 ```
 
-所有主要运行参数集中在 [config.yaml](config.yaml)，每个键都有中文说明。默认配置针对未裁剪的 `deployment/scene/`，线速度为 **3.0 m/s**，生成 **50 条**轨迹。可调整代理宽度/高度、坡度、爬升和 Recast 栅格参数，导航路线采样与距离限制，线速度（m/s）、角速度（rad/s）、帧率、D435 RGB 分辨率/FoV，以及输出项。代理半径按配置宽度的一半计算。指定起终点时两者都使用 Habitat Y-up 世界坐标 `[x,y,z]` 并且需要同时提供；`null` 时在可行走连通岛和 NavMesh 三角面中面积加权采样。
+所有主要运行参数集中在 [config.yaml](config.yaml)，每个键都有中文说明。默认配置使用未裁剪的 `deployment/scene/`，线速度为 **3.0 m/s**，生成 **50 条**轨迹。指定起终点时使用 Habitat Y-up 世界坐标 `[x,y,z]`，必须同时提供；否则默认优先从 `cameras.json` 采集位置投影到 NavMesh 后抽取起终点。
+
+默认采集轨迹先验开启：路线每 0.5 m 采样检查距 `cameras.json` 相机中心轨迹的 X/Z 平面距离，要求全路径都位于默认 **10 m 缓冲区**内。采集轨迹本身按源 Z-up 转为 Habitat `(x,z,-y)`。可以在 YAML 中关闭先验、改缓冲半径或关闭端点优先；详细解释见 [VISUALIZATION.md](VISUALIZATION.md)。
 
 移动按 `linear_speed_mps / fps` 限制每帧前进距离，转向受 `angular_speed_radps / fps` 限制，位置经过 PathFinder 的 `try_step` 约束。逐帧姿态写入 `navigation_poses.json`：包括起点、终点、每帧代理/相机位置、时间戳、渲染耗时和相机朝向四元数。四元数顺序为 `x,y,z,w`，位置坐标系为 Habitat Y-up 世界坐标。
 
@@ -34,7 +38,7 @@ python deployment/prepare_scene.py --crop -50 10 -40 20 --out deployment/scene_c
 
 ## 验证输出
 
-`scene/wanda.navmesh` 是完整场景实际烘焙结果。`results_full/route_*/validation.json` 为每条路线的实测报告；`trajectory_topdown.png` 展示 NavMesh、真实移动轨迹和起终点；`mesh_navmesh_topdown.png` 展示彩色 mesh 顶视并叠加半透明 NavMesh；`path.npy` 为 geodesic 转折点，`trajectory.npy` 为按速度控制且经过 `PathFinder.try_step` 过滤的移动轨迹；`navigation_poses.json` 记录完整逐帧位姿；`navigation_rgb.mp4` 和 `rgb_*.png` 来自 CUDA Gaussian Splatting。`scene_crop/` 与 `results_crop/` 保留轻量 crop 验证副本。
+`scene/wanda.navmesh` 是完整场景 NavMesh。`results_full/route_*/validation.json` 为逐路线报告；`trajectory_topdown.png` 展示 NavMesh、轨迹和起终点；`mesh_navmesh_topdown.png` 是彩色 mesh 聚合底图与 NavMesh 叠图；`mesh_topdown_base.png` 和 `mesh_topdown_coordinates.json` 提供纯底图及坐标映射；`mesh_navmesh_detail_*.png` 是 YAML 指定区域的放大图。将 `output.gaussian_navmesh_overlay` 打开后才额外生成 `gaussian_topdown_raw.png` 和 `gaussian_navmesh_topdown.png`，因为高分辨率俯视 Gaussian 会增加显存和渲染时间。`path.npy` 为 geodesic 转折点，`trajectory.npy` 为经 `PathFinder.try_step` 约束的逐帧轨迹；`navigation_poses.json` 记录逐帧相机/代理位姿；`navigation_rgb.mp4` 和 `rgb_*.png` 来自 CUDA Gaussian Splatting。
 
 相机使用 D435 **RGB** 标称 HFOV=69°、640×360、安装高度1.5米，理想针孔，无畸变。不是深度相机的87°视场角，也不是实机逐台标定内参。默认坐标/mesh单位假定米。代理半径0.25米，高1.5米，爬升0.2米、坡度35°；NavMesh体素0.1×0.05米。路径导航是确定性geodesic跟随与NavMesh碰撞约束，不包含视觉策略、SLAM或运动控制器。
 
@@ -54,9 +58,9 @@ python deployment/prepare_scene.py --crop -50 10 -40 20 --out deployment/scene_c
 
 默认低密度完整空间范围 Gaussian 文件 `scene/wanda_crop.gs.ply` 来自原始 35,225,246 点的固定 stride=8 准备结果，共 4,403,156 点；mesh 保留约 1,148 万三角面。本地 `scene_fullres/wanda_crop.gs.ply` 保留全部 35,225,246 点，并完成同一路线 272 帧验证（见本地 `results_fullres/route_0000/validation.json`）。全密度地面视角的细节明显改善；全密度资产和验证图片均不上传 Git。
 
-`visualization` 是可视化 YAML 配置分区，可设置轨迹颜色/线宽、NavMesh 颜色/透明度和输出 DPI；`output` 控制生成哪些图像和媒体。彩色 mesh 图是顶点颜色顶视投影用于对齐诊断，不是严格正射纠正的测绘 DOM，树冠和建筑会遮挡地面。
+`visualization` 是可视化 YAML 配置分区，可设置图像 3600×3000 分辨率、局部放大范围、颜色/透明度和输出 DPI；`output` 控制生成哪些图像和媒体。彩色 mesh 图是顶点颜色栅格聚合，树冠和建筑会与地面同平面投影，不是带遮挡计算的正射影像。图片判读和图层含义见 [VISUALIZATION.md](VISUALIZATION.md)。
 
-起终点算法先过滤面积不足的连通岛，再按岛面积选取岛、按 NavMesh 三角面面积加权抽样，并在三角形内用均匀重心坐标生成候选点。最后用 PathFinder 求真实测地距离，保留符合长度限制的路线。候选点都来自可行走表面；狭长弯曲场景仍可能需要增加 `sample_attempts`。手工坐标会投影到 NavMesh，且要求起终点在同一个连通岛。
+路线算法默认在相机采集轨迹位置中选起终点、吸附到可行走面，并用 PathFinder 求测地路线；路线必须满足配置距离范围并全程处于轨迹缓冲区内。关闭端点优先时回退到 NavMesh 三角面面积加权采样，但启用先验时路径仍须在缓冲区内。手工坐标会投影到 NavMesh，且要求起终点同岛、路线长度合格及先验条件满足。
 
 目录职责：
 
@@ -66,6 +70,9 @@ python deployment/prepare_scene.py --crop -50 10 -40 20 --out deployment/scene_c
 - `deployment/wanda_nav/pipeline.py`：单条路线的烘焙、渲染、位姿和验证输出。
 - `deployment/wanda_nav/cli.py`：参数入口和多条路线调度。
 - `deployment/validate_navigation.py`：保留旧调用方式的兼容入口。
+- `deployment/CHANGELOG.md`：日期化功能修改、bug 修复和验证记录。
+- `deployment/VISUALIZATION.md`：图层说明、局部图判读和采集轨迹先验。
+- `deployment/tests/`：坐标方向、透视投影和先验逻辑的回归测试。
 - `deployment/scene_crop/`、`deployment/results_crop/`、`deployment/logs/`：本地生成资产、结果及日志，均不上传原始数据或大型结果。
 
 坐标约定：源模型 `(x,y,z)` 转为 Habitat `(x,z,-y)`，Y 轴向上；相机局部 -Z 朝前、+Y 朝上。JSON 朝向采用主动旋转的 `xyzw` 四元数，表示相机局部坐标到世界坐标的旋转；时间戳是模拟时间，不是渲染壁钟时间。
@@ -73,13 +80,13 @@ python deployment/prepare_scene.py --crop -50 10 -40 20 --out deployment/scene_c
 
 ## 高分辨率可视化刷新
 
-可复用已有路线，用 `bash deployment/run_validation.sh --visualize-only --scene-dir /data/projects/CloudRobo/deployment/scene_fullres --output /data/projects/CloudRobo/deployment/results_fullres` 单独刷新。不会重新烘焙 NavMesh 或运行视频循环。新增 Gaussian 图目前由该独立刷新入口生成。
+可复用已有路线，用 `bash deployment/run_validation.sh --visualize-only --scene-dir /data/projects/CloudRobo/deployment/scene_fullres --output /data/projects/CloudRobo/deployment/results_fullres` 单独刷新。它读取每条路线的 `effective_config.yaml`，不重新烘焙 NavMesh 或运行行走视频；会为 Gaussian 高空底图单独初始化一次场景。正常导航 pipeline 也会生成同样的 Gaussian 图。
 
 YAML 中 `visualization.image_width_px/image_height_px` 默认 3600×3000；mesh 底图使用全部顶点按 0.06 米像素聚合颜色并做归一化邻域平滑，空白处保持白色。它是颜色诊断图，并非带遮挡测试的正射纹理产品，垂直方向不同表面的颜色可能混合。
 
 Gaussian 底图使用真实 Habitat-GS 俯视透视相机；NavMesh 顶点根据自身高度投影到同一相机像素坐标，不可简单把透视图按 X/Z 平面拉伸叠加。顶部相机高度偏移和叠层透明度可在 YAML 中调整。图中被屋顶遮挡的地面仍可能绘制 NavMesh 诊断层，不代表地面可从相机直接看到。
 
-**已知限制：**当前全密度高斯的高空俯视图存在严重拉丝，不作为合格的精细障碍底图；这不影响已验证的地面相机渲染。`gaussian_topdown_height_m` 表示相对于 NavMesh 最高点的高度偏移。独立刷新入口目前会逐条初始化高斯场景，批量刷新耗时较长。
+**已知限制：**当前全密度高斯的高空俯视图存在严重拉丝，不作为合格的精细障碍底图；这不影响已验证的地面相机渲染。`gaussian_topdown_height_m` 表示相对于 NavMesh 最高点的高度偏移。正常批量导航会在共享 Simulator 中共用俯视与地面 sensor；独立刷新模式每条路线单独载入一次场景，批量刷新耗时较长。
 
 mesh 底图第一行对应世界 Z 最大侧、第一列对应 X 最小侧，使用 `origin=upper` 与正常的米制 extent 配对；已修复此前只翻转底图造成的错位。另存 `mesh_topdown_base.png` 和 `mesh_topdown_coordinates.json`，记录完整栅格和坐标范围。`detail_regions_xz` 为局部放大范围列表，每项为 `[xmin,xmax,zmin,zmax]`，输出 `mesh_navmesh_detail_00.png` 等局部图。局部图复用相同世界坐标，不重新拉伸底图。
 

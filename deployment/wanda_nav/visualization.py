@@ -76,13 +76,13 @@ def save_gaussian_navmesh_overlay(rgb, island_triangles, bounds, output_path, co
     fig, ax = plt.subplots()
     ax.imshow(image, extent=(xmin, xmax, zmax, zmin), origin="upper")
     for _, triangles in island_triangles:
-        ax.add_collection(PolyCollection(triangles[:, :, [0, 2]],
+        ax.add_collection(PolyCollection(triangles,
                                          facecolors=config["visualization"]["navmesh_color"],
                                          edgecolors="none",
                                          alpha=config["visualization"]["gaussian_overlay_alpha"],
                                          rasterized=True))
-    _finish_axis(ax, (xmin, xmax, zmin, zmax))
-    ax.set_ylim(zmax, zmin)
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(zmin, zmax)
     ax.set_xlabel("图像列 (px)")
     ax.set_ylabel("图像行 (px)")
     ax.set_title("Habitat-GS 高斯俯视透视渲染 + NavMesh（逐顶点投影）")
@@ -90,6 +90,18 @@ def save_gaussian_navmesh_overlay(rgb, island_triangles, bounds, output_path, co
                               label="可行走 NavMesh")], loc="upper right")
     fig.tight_layout()
     _save_figure(fig, output_path, config)
+
+
+def project_navmesh_to_topdown_pixels(triangles, camera_y, focal, center_x, center_z,
+                                      width, height):
+    """将世界 XYZ NavMesh 三角面投影到向下看的 Habitat 相机像素 XY。"""
+    triangles = np.asarray(triangles, dtype=np.float64).reshape(-1, 3, 3)
+    depth = camera_y - triangles[..., 1]
+    if np.any(depth <= 0):
+        raise ValueError("俯视相机必须高于所有 NavMesh 顶点")
+    pixel_x = focal * (triangles[..., 0] - center_x) / depth + (width - 1) / 2
+    pixel_y = (height - 1) / 2 - focal * (triangles[..., 2] - center_z) / depth
+    return np.stack([pixel_x, pixel_y], axis=-1)
 
 
 def topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, island):
