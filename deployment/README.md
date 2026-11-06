@@ -30,7 +30,7 @@ python deployment/prepare_scene.py
 python deployment/prepare_scene.py --crop -50 10 -40 20 --out deployment/scene_crop
 ```
 
-完整场景 mesh 包含 11,479,664 个三角面，Gaussian 从 35,225,246 个原始点按固定 stride=8 保留 4,403,156 个。轻量 crop 的实测资产包含 1,284,922 个 mesh 三角面和 870,725 个高斯，SH 不降阶。
+完整场景 mesh 包含 11,479,664 个三角面。原始 Gaussian 有 35,225,246 个点；低密度预览版本按 stride=8 保留 4,403,156 个。轻量 crop 的实测资产包含 1,284,922 个 mesh 三角面和 870,725 个高斯，SH 不降阶。
 
 ## 验证输出
 
@@ -52,7 +52,7 @@ python deployment/prepare_scene.py --crop -50 10 -40 20 --out deployment/scene_c
 
 完整场景批量运行会在进程内共享一个 Gaussian 渲染 Simulator，避免每条路线重新加载约 1.1 GiB 的渲染 PLY。`--skip-bake` 复用已验证的 `scene/wanda.navmesh`；`--single` 只执行一条路线，`--count N` 临时覆盖 YAML 的生成条数，`--force` 重建已有结果。批量会识别有效的 `validation.json` 并跳过，失败条目写入 `failure.json` 后继续，全部成功时自动清除旧的 `failures.json`。
 
-默认完整空间范围的 Gaussian 文件 `scene/wanda.gs.ply` 来自原始 35,225,246 点的固定 stride=8 准备结果，共 4,403,156 点；mesh 保留约 1,148 万三角面。它不是原始全密度 Gaussian，完整全密度渲染需要另行评估显存与加载时间。
+默认低密度完整空间范围 Gaussian 文件 `scene/wanda_crop.gs.ply` 来自原始 35,225,246 点的固定 stride=8 准备结果，共 4,403,156 点；mesh 保留约 1,148 万三角面。本地 `scene_fullres/wanda_crop.gs.ply` 保留全部 35,225,246 点，并完成同一路线 272 帧验证（见本地 `results_fullres/route_0000/validation.json`）。全密度地面视角的细节明显改善；全密度资产和验证图片均不上传 Git。
 
 `visualization` 是可视化 YAML 配置分区，可设置轨迹颜色/线宽、NavMesh 颜色/透明度和输出 DPI；`output` 控制生成哪些图像和媒体。彩色 mesh 图是顶点颜色顶视投影用于对齐诊断，不是严格正射纠正的测绘 DOM，树冠和建筑会遮挡地面。
 
@@ -69,3 +69,22 @@ python deployment/prepare_scene.py --crop -50 10 -40 20 --out deployment/scene_c
 - `deployment/scene_crop/`、`deployment/results_crop/`、`deployment/logs/`：本地生成资产、结果及日志，均不上传原始数据或大型结果。
 
 坐标约定：源模型 `(x,y,z)` 转为 Habitat `(x,z,-y)`，Y 轴向上；相机局部 -Z 朝前、+Y 朝上。JSON 朝向采用主动旋转的 `xyzw` 四元数，表示相机局部坐标到世界坐标的旋转；时间戳是模拟时间，不是渲染壁钟时间。
+
+
+## 高分辨率可视化刷新
+
+可复用已有路线，用 `bash deployment/run_validation.sh --visualize-only --scene-dir /data/projects/CloudRobo/deployment/scene_fullres --output /data/projects/CloudRobo/deployment/results_fullres` 单独刷新。不会重新烘焙 NavMesh 或运行视频循环。新增 Gaussian 图目前由该独立刷新入口生成。
+
+YAML 中 `visualization.image_width_px/image_height_px` 默认 3600×3000；mesh 底图使用全部顶点按 0.06 米像素聚合颜色并做归一化邻域平滑，空白处保持白色。它是颜色诊断图，并非带遮挡测试的正射纹理产品，垂直方向不同表面的颜色可能混合。
+
+Gaussian 底图使用真实 Habitat-GS 俯视透视相机；NavMesh 顶点根据自身高度投影到同一相机像素坐标，不可简单把透视图按 X/Z 平面拉伸叠加。顶部相机高度偏移和叠层透明度可在 YAML 中调整。图中被屋顶遮挡的地面仍可能绘制 NavMesh 诊断层，不代表地面可从相机直接看到。
+
+**已知限制：**当前全密度高斯的高空俯视图存在严重拉丝，不作为合格的精细障碍底图；这不影响已验证的地面相机渲染。`gaussian_topdown_height_m` 表示相对于 NavMesh 最高点的高度偏移。独立刷新入口目前会逐条初始化高斯场景，批量刷新耗时较长。
+
+mesh 底图第一行对应世界 Z 最大侧、第一列对应 X 最小侧，使用 `origin=upper` 与正常的米制 extent 配对；已修复此前只翻转底图造成的错位。另存 `mesh_topdown_base.png` 和 `mesh_topdown_coordinates.json`，记录完整栅格和坐标范围。`detail_regions_xz` 为局部放大范围列表，每项为 `[xmin,xmax,zmin,zmax]`，输出 `mesh_navmesh_detail_00.png` 等局部图。局部图复用相同世界坐标，不重新拉伸底图。
+
+回归验证：`PYTHONPATH=deployment /data/anaconda3/envs/cloudrobo-habitat-gs/bin/python -m unittest discover -s deployment/tests -v`。四角颜色用例检查俯视方向及边界点；全场图已目视核对斜路、上/下转角和右侧通道。更多修改说明见 [CHANGELOG.md](CHANGELOG.md)。
+
+此前 0.1m/0.05m 网格差异图：绿色表示共有区域，红色表示 0.05m 新增区域，蓝色表示仅 0.1m 存在区域；这不是可走/不可走的分类图。
+
+低矮障碍需检查碰撞 mesh 是否包含柱体，以及柱体高度、宽度与 `max_climb_m`（当前 0.2m）、`cell_size_m`（0.1m）和 `cell_height_m`（0.05m）的关系。最大跨越高度以内的物体可能被当成台阶；区域面积过滤主要过滤可行走岛，不能直接用它解释柱体漏检。尚未定位的柱体不能仅凭底图颜色判断已被安全避让。

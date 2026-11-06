@@ -70,10 +70,13 @@ output:
   trajectory_topdown: true
   # 是否写入彩色 mesh 顶视图与 NavMesh 的半透明叠加图。
   mesh_navmesh_overlay: true
+  # --visualize-only 时生成真实 Habitat-GS 俯视渲染与逐顶点投影 NavMesh 叠加图。
+  gaussian_navmesh_overlay: true
   # 是否额外保存首帧、中间帧、末帧 RGB PNG。
   rgb_keyframes: true
-  # 点云顶视图最大绘制采样点数；超大 mesh 会用固定种子均匀抽样。
-  mesh_max_points: 500000
+  # mesh 顶视颜色底图的最大输入顶点数；null 表示使用全部顶点。
+  # 大场景可设为 2000000 降低内存，图像仍会按像素聚合而不是随机画碎点。
+  topdown_max_points: null
 
 # 批量生成控制：每条路线分别输出视频、JSON 和俯视图。
 generation:
@@ -82,13 +85,34 @@ generation:
 
 # 俯视图绘制参数，改变外观不会改变碰撞几何或导航结果。
 visualization:
-  # 输出图片每英寸像素数；越大图片越清晰、文件越大。
-  dpi: 160
+  # 俯视图输出宽度（像素）；配合高度和 DPI 控制导出细节。
+  image_width_px: 3600
+  # 俯视图输出高度（像素）。
+  image_height_px: 3000
+  # 输出图片每英寸像素数；主要影响标注文字/线条细度，不改变指定像素尺寸。
+  dpi: 220
+  # 俯视颜色底图每像素对应的世界尺寸（米）；越小保留的局部纹理细节越多。
+  topdown_pixel_size_m: 0.06
+  # 底图颜色邻域平滑半径（像素）；0 关闭，建议 1-2 降低孤立噪点。
+  topdown_smoothing_px: 1
   # NavMesh 半透明覆盖层的不透明度，范围 [0,1]。
   navmesh_alpha: 0.32
   # NavMesh 覆盖颜色，使用 HTML 十六进制颜色。
   navmesh_color: '#2b9d57'
+  # mesh 底图上 NavMesh 的透明度。
+  mesh_overlay_alpha: 0.28
+  # Gaussian 底图上 NavMesh 的透明度。
+  gaussian_overlay_alpha: 0.42
+  # Gaussian 俯视渲染相机高度（米），需高于 NavMesh 包围盒顶部。
+  gaussian_topdown_height_m: 80.0
   # 轨迹线颜色。
   trajectory_color: '#d62728'
   # 轨迹线宽，单位为绘图点。
   trajectory_linewidth: 1.7
+
+  # 局部放大范围，每项为 [X最小,X最大,Z最小,Z最大]，单位米；空列表关闭。
+  # 以下覆盖广场环岛、右侧通道与下侧转角，可按待检查立柱坐标调整。
+  detail_regions_xz:
+    - [-58, -25, -15, 20]
+    - [82, 120, -15, 35]
+    - [-60, 0, -145, -100]

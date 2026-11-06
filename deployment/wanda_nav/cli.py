@@ -22,8 +22,13 @@ def main():
     parser.add_argument('--force', action='store_true', help='重建已完成的路线目录')
     parser.add_argument('--count', type=int, help='覆盖 YAML 中的轨迹条数')
     parser.add_argument('--single', action='store_true', help='只运行一条路线（用于完整场景预验证）')
+    parser.add_argument('--visualize-only', action='store_true',
+                        help='只刷新已有路线的俯视图，不重新生成视频或烘焙 NavMesh')
     args = parser.parse_args()
     config = load_config(args.config)
+    if args.visualize_only:
+        refresh_visualizations(args, config)
+        return
     count = args.count if args.count is not None else config['generation']['trajectory_count']
     if args.single:
         count = 1
@@ -91,3 +96,87 @@ def main():
             json.dumps(failures, ensure_ascii=False, indent=2), encoding='utf-8')
         raise RuntimeError(f'{len(failures)} / {count} 条路线失败，详见 {args.output / "failures.json"}')
     (args.output / 'failures.json').unlink(missing_ok=True)
+
+
+def refresh_visualizations(args, config):
+    """基于已有 route_*/path.npy 刷新高分辨率可视化。"""
+    import numpy as np
+    import matplotlib
+    matplotlib.use('Agg')
+    import habitat_sim as hs
+    import magnum as mn
+    from PIL import Image
+    from .visualization import topdown_plots, save_gaussian_navmesh_overlay
+
+    scene_dir = args.scene_dir or resolve_path(config['scene']['directory'])
+    stage = json.loads((scene_dir / 'wanda.stage_config.json').read_text(encoding='utf-8'))
+    navmesh_path = scene_dir / 'wanda.navmesh'
+    pathfinder = hs.PathFinder()
+    if not pathfinder.load_nav_mesh(str(navmesh_path)):
+        raise RuntimeError(f'无法载入 NavMesh: {navmesh_path}')
+    scene_bounds = np.asarray(pathfinder.get_bounds(), dtype=np.float32)
+    xmin, zmin = scene_bounds[0, 0], scene_bounds[0, 2]
+    xmax, zmax = scene_bounds[1, 0], scene_bounds[1, 2]
+    triangles_by_island = []
+    for island_id in range(pathfinder.num_islands):
+        triangles = np.asarray(pathfinder.build_navmesh_vertices(island_id)).reshape(-1, 3, 3)
+        if len(triangles):
+            triangles_by_island.append((island_id, triangles))
+
+    output_dirs = sorted(args.output.glob('route_*'))
+    if not output_dirs:
+        raise RuntimeError(f'没有找到路线输出目录: {args.output}')
+
+    for output_dir in output_dirs:
+        path_file = output_dir / 'path.npy'
+        trajectory_file = output_dir / 'trajectory.npy'
+        if not path_file.exists() or not trajectory_file.exists():
+            continue
+        path = np.load(path_file)
+        trajectory = np.load(trajectory_file)
+        frames = [(point, 0.0, index / config['motion']['fps']) for index, point in enumerate(trajectory)]
+        island = int(pathfinder.get_island(path[0]))
+        topdown_plots(pathfinder, path, frames, scene_dir, output_dir, config, island)
+
+        if config['output'].get('gaussian_navmesh_overlay', False):
+            sensor = hs.CameraSensorSpec()
+            sensor.uuid = 'rgb'
+            sensor.sensor_type = hs.SensorType.COLOR
+            sensor.resolution = [config['visualization']['image_height_px'],
+                                 config['visualization']['image_width_px']]
+            sensor.position = [0.0, 0.0, 0.0]
+            sensor.orientation = [float(-np.pi / 2), 0.0, 0.0]
+            top_y = float(scene_bounds[1, 1] + config['visualization']['gaussian_topdown_height_m'])
+            width, height = sensor.resolution[1], sensor.resolution[0]
+            span = max(float(xmax-xmin), float(zmax-zmin) * width / height) * 1.10
+            focal = width * (top_y - float(scene_bounds[1, 1])) / span
+            sensor.hfov = float(np.degrees(2 * np.arctan(width / (2 * focal))))
+            sensor.far = top_y - float(scene_bounds[0, 1]) + 100.0
+            agent = hs.agent.AgentConfiguration()
+            agent.sensor_specifications = [sensor]
+            sim_cfg = hs.SimulatorConfiguration()
+            sim_cfg.scene_id = str((scene_dir / 'wanda.stage_config.json').resolve())
+            sim_cfg.enable_physics = False
+            sim_cfg.load_semantic_mesh = False
+            sim_cfg.gpu_device_id = 0
+            with hs.Simulator(hs.Configuration(sim_cfg, [agent])) as sim:
+                state = hs.AgentState()
+                top_y = float(scene_bounds[1, 1] + config['visualization']['gaussian_topdown_height_m'])
+                state.position = mn.Vector3(float((xmin + xmax) / 2), top_y, float((zmin + zmax) / 2))
+                from habitat_sim.utils.common import quat_from_angle_axis
+                state.rotation = quat_from_angle_axis(0.0, np.array([0, 1, 0]))
+                sim.initialize_agent(0, state)
+                rgb = sim.get_sensor_observations()['rgb'][:, :, :3]
+                Image.fromarray(rgb).save(output_dir / 'gaussian_topdown_raw.png')
+            # 对每个三维顶点做透视投影，不能用平面 extent 假装正射图。
+            projected = []
+            for idx, tri in triangles_by_island:
+                pixels = tri.copy()
+                depth = top_y - tri[..., 1]
+                pixels[..., 0] = focal * (tri[..., 0] - (xmin+xmax)/2) / depth + (width-1)/2
+                pixels[..., 2] = focal * (tri[..., 2] - (zmin+zmax)/2) / depth + (height-1)/2
+                projected.append((idx, pixels))
+            save_gaussian_navmesh_overlay(rgb, projected,
+                                          (-0.5, width-0.5, -0.5, height-0.5),
+                                          output_dir / 'gaussian_navmesh_topdown.png', config)
+        print(f'Refreshed visualizations: {output_dir}', flush=True)

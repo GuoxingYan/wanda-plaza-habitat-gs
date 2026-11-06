@@ -30,3 +30,7 @@ deployment/results_crop/route_*/
 
 deployment/results_full/
 deployment/results_full_preview/
+
+# 全密度场景与本地诊断输出，不上传数据
+deployment/scene_fullres/
+deployment/results_fullres/

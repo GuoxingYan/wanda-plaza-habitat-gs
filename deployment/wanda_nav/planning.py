@@ -26,7 +26,9 @@ def load_config(path):
     assert motion["linear_speed_mps"] > 0 and motion["angular_speed_radps"] > 0
     assert motion["fps"] > 0 and camera["width"] > 0 and camera["height"] > 0
     assert config["navmesh"]["agent_width_m"] > 0 and config["navmesh"]["agent_height_m"] > 0
-    assert nav["sample_attempts"] > 0 and config["output"]["mesh_max_points"] > 0
+    assert nav["sample_attempts"] > 0
+    topdown_max_points = config["output"].get("topdown_max_points")
+    assert topdown_max_points is None or topdown_max_points > 0
     assert nav["min_route_length_m"] >= 0 and nav["max_route_length_m"] > nav["min_route_length_m"]
     assert (nav["start"] is None) == (nav["goal"] is None), "start/goal 必须同时指定或同时留空"
     return config
