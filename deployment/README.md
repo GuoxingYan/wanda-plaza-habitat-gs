@@ -22,7 +22,7 @@ bash deployment/run_validation.sh --config deployment/config.yaml --scene-dir de
 
 默认采集轨迹先验开启：路线每 0.5 m 采样检查距 `cameras.json` 相机中心轨迹的 X/Z 平面距离，要求全路径都位于默认 **10 m 缓冲区**内。采集轨迹本身按源 Z-up 转为 Habitat `(x,z,-y)`。可以在 YAML 中关闭先验、改缓冲半径或关闭端点优先；详细解释见 [VISUALIZATION.md](VISUALIZATION.md)。
 
-移动按 `linear_speed_mps / fps` 限制每帧前进距离，转向受 `angular_speed_radps / fps` 限制，位置经过 PathFinder 的 `try_step` 约束。逐帧姿态写入 `navigation_poses.json`：包括起点、终点、每帧代理/相机位置、时间戳、渲染耗时和相机朝向四元数。四元数顺序为 `x,y,z,w`，位置坐标系为 Habitat Y-up 世界坐标。
+移动按 `linear_speed_mps / fps` 限制每帧前进距离，转向受 `angular_speed_radps / fps` 限制，位置经过 PathFinder 的 `try_step` 约束。逐帧相机位姿写入 `navigation_poses.json`：`coordinate_frame` 描述 Y-up 坐标和单位，`route` 保存起终点及 `path_length`（米），`camera` 保存 D435 RGB 参数，`frames` 保存帧序号、模拟时间、相机位置和 `xyzw` 四元数。四元数顺序为 x、y、z、w；每帧 `position` 是相机位置而非代理地面位置。
 
 输入文件位于 `Wanda Plaza/`（链接到 `/data/data/Wanda Plaza`）。原文件不修改。
 

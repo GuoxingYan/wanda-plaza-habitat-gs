@@ -94,7 +94,6 @@ def run_one(args, config, render_sim=None):
     if config["output"].get("gaussian_navmesh_overlay", False) and not args.bake_only:
         import matplotlib
         matplotlib.use("Agg")
-        from PIL import Image
         height = int(config["visualization"]["image_height_px"])
         width = int(config["visualization"]["image_width_px"])
         world_bounds = np.asarray(pathfinder.get_bounds(), dtype=np.float64)
@@ -188,11 +187,9 @@ def run_one(args, config, render_sim=None):
                     if config["output"]["rgb_keyframes"] and index in {0, len(frames) // 2, len(frames) - 1}:
                         Image.fromarray(rgb).save(output_dir / f"rgb_{index:04d}.png")
                     camera_position = position + np.array([0, config["motion"]["camera_height_m"], 0])
-                    frame_records.append({"frame": index, "timestamp_s": float(timestamp),
-                                          "agent_position_xyz_m": [float(x) for x in position],
-                                          "camera_position_xyz_m": [float(x) for x in camera_position],
-                                          "camera_orientation_quaternion_xyzw": quaternion_xyzw(state.rotation),
-                                          "yaw_rad": float(yaw), "render_seconds": float(render_times[-1])})
+                    frame_records.append({"frame_index": index, "timestamp_s": float(timestamp),
+                                          "position": [float(x) for x in camera_position],
+                                          "xyzw": quaternion_xyzw(state.rotation)})
                     if index % 100 == 0:
                         print(f"Rendered {index}/{len(frames)} frames", flush=True)
             finally:
@@ -212,13 +209,27 @@ def run_one(args, config, render_sim=None):
                               "height_m": config["motion"]["camera_height_m"],
                               "note": "标称 RGB FoV 的针孔近似，无畸变，不是逐机标定内参"})
         if config["output"]["poses_json"]:
-            pose_data = {"coordinate_frame": "Habitat world, Y-up; positions in meters",
-                         "quaternion_convention": "xyzw (numpy-quaternion xyz followed by scalar w)",
-                         "start_position_xyz_m": frame_records[0]["agent_position_xyz_m"],
-                         "goal_position_xyz_m": [float(x) for x in points[-1]],
-                         "actual_end_position_xyz_m": frame_records[-1]["agent_position_xyz_m"],
-                         "geodesic_distance_m": float(path.geodesic_distance),
-                         "frame_rate_fps": config["motion"]["fps"], "frames": frame_records}
+            pose_data = {
+                "coordinate_frame": {
+                    "name": "Y-up",
+                    "position_unit": "m",
+                    "orientation_format": "quaternion_xyzw",
+                },
+                "route": {
+                    "route_id": output_dir.name,
+                    "seed": int(config["navigation"]["seed"]),
+                    "start": {"position": frame_records[0]["position"]},
+                    "goal": {"position": [float(x) for x in points[-1]]},
+                    "path_length": float(path.geodesic_distance),
+                },
+                "camera": {
+                    "model": "D435 RGB nominal pinhole",
+                    "width": int(camera["width"]),
+                    "height": int(camera["height"]),
+                    "hfov_deg": float(camera["hfov_deg"]),
+                },
+                "frames": frame_records,
+            }
             (output_dir / "navigation_poses.json").write_text(json.dumps(pose_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     report["environment"] = {"habitat_gs_version": hs.__version__, "cuda_enabled": bool(hs.cuda_enabled)}

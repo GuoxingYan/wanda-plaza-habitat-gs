@@ -34,3 +34,7 @@ deployment/results_full_preview/
 # 全密度场景与本地诊断输出，不上传数据
 deployment/scene_fullres/
 deployment/results_fullres/
+
+# 本地 50 条全场景新配置验证结果，包含视频和大型可视化 HTML
+deployment/results_full_v020/
+deployment/pose_schema_smoke/
