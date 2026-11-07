@@ -22,7 +22,7 @@ bash deployment/run_validation.sh --config deployment/config.yaml --scene-dir de
 
 默认采集轨迹先验开启：路线每 0.5 m 采样检查距 `cameras.json` 相机中心轨迹的 X/Z 平面距离，要求全路径都位于默认 **10 m 缓冲区**内。采集轨迹本身按源 Z-up 转为 Habitat `(x,z,-y)`。可以在 YAML 中关闭先验、改缓冲半径或关闭端点优先；详细解释见 [VISUALIZATION.md](VISUALIZATION.md)。
 
-移动按 `linear_speed_mps / fps` 限制每帧前进距离，转向受 `angular_speed_radps / fps` 限制，位置经过 PathFinder 的 `try_step` 约束。逐帧相机位姿写入 `navigation_poses.json`：`coordinate_frame` 描述 Y-up 坐标和单位，`route` 保存起终点及 `path_length`（米），`camera` 保存 D435 RGB 参数，`frames` 保存帧序号、模拟时间、相机位置和 `xyzw` 四元数。四元数顺序为 x、y、z、w；每帧 `position` 是相机位置而非代理地面位置。
+运动学使用 `motion.model: differential_drive`：每段直线采用固定帧率三角/梯形速度曲线，受最大线速度、加速度和制动减速度约束；路径转折处停车后原地转向，受最大角速度约束。位置仍经 PathFinder `try_step` 限制在 NavMesh 上。该模型适用于差速/全向底盘的简化仿真，不适用于汽车式最小转弯半径约束。逐帧相机位姿写入 `navigation_poses.json`：`coordinate_frame` 描述 Y-up 坐标和单位，`route` 保存代理起终点、对应相机起终点及 `path_length`（米），`camera` 保存 D435 RGB 参数，`frames` 保存帧序号、模拟时间、代理地面位置、相机位置和 `xyzw` 四元数。四元数顺序为 x、y、z、w；每帧 `agent_position` 是代理地面位置，`position` 是相机位置。
 
 输入文件位于 `Wanda Plaza/`（链接到 `/data/data/Wanda Plaza`）。原文件不修改。
 
@@ -53,6 +53,8 @@ python deployment/prepare_scene.py --crop -50 10 -40 20 --out deployment/scene_c
 ## 批量生成与代码结构
 
 `generation.trajectory_count` 控制生成的**轨迹条数**；每条轨迹输出至 `results_full/route_0000/`、`route_0001/` 等目录，种子依次为基础种子加索引。视频帧数由路径长度、线速度、角速度和 fps 自然决定；在转折点先原地转向，再沿最短路径前进。每个目录的 `effective_config.yaml` 是实际生效参数快照。固定起终点时多条结果会复用相同路线。
+
+批量续跑会根据 `output` 开关判断必需文件：关闭视频时不要求 MP4 或非零 RGB 帧计数，关闭位姿或某类俯视图时也不会因缺少对应文件而重复生成。场景级 NavMesh 三角面、mesh 彩色栅格和采集轨迹吸附候选会按输入文件指纹缓存；修改 NavMesh、mesh、`cameras.json` 或相关可视化参数后自动失效重建。隐藏 `.npz` 缓存保存在场景目录，不属于可交付结果。
 
 完整场景批量运行会在进程内共享一个 Gaussian 渲染 Simulator，避免每条路线重新加载约 1.1 GiB 的渲染 PLY。`--skip-bake` 复用已验证的 `scene/wanda.navmesh`；`--single` 只执行一条路线，`--count N` 临时覆盖 YAML 的生成条数，`--force` 重建已有结果。批量会识别有效的 `validation.json` 并跳过，失败条目写入 `failure.json` 后继续，全部成功时自动清除旧的 `failures.json`。
 

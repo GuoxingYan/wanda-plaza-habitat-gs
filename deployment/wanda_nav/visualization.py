@@ -1,5 +1,6 @@
 """生成高分辨率俯视诊断图，并尽量保留 mesh/Gaussian 底图的空间细节。"""
 import json
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -63,6 +64,113 @@ def _save_figure(fig, output_path, config):
     plt.close(fig)
 
 
+def _file_signature(path):
+    """用路径、大小和修改时间识别静态输入是否变化。"""
+    path = Path(path).resolve()
+    stat = path.stat()
+    return {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+def _static_visualization_key(navmesh_path, mesh_path, config, include_navmesh=True):
+    """分别为 mesh 栅格或 NavMesh 缓存生成稳定指纹。"""
+    visual = config["visualization"]
+    output = config["output"]
+    payload = {
+        "mesh": _file_signature(mesh_path),
+        "pixel_size": visual.get("topdown_pixel_size_m", 0.06),
+        "smoothing": visual.get("topdown_smoothing_px", 1),
+        "max_points": output.get("topdown_max_points"),
+    }
+    if include_navmesh:
+        payload["navmesh"] = _file_signature(navmesh_path)
+        payload.update({"width": visual.get("image_width_px", 3600),
+                        "height": visual.get("image_height_px", 3000),
+                        "dpi": visual["dpi"], "navmesh_color": visual["navmesh_color"],
+                        "alpha": visual.get("mesh_overlay_alpha", 0.28),
+                        "detail_regions": visual.get("detail_regions_xz", [])})
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    return {"key": digest, "inputs": payload}
+
+
+def _load_cached_navmesh(pathfinder, navmesh_path):
+    """以场景 NavMesh 文件指纹缓存连通岛三角面和包围范围。"""
+    signature = _file_signature(navmesh_path)
+    cache_path = Path(navmesh_path).with_name(".wanda_navmesh_visual_cache.npz")
+    try:
+        with np.load(cache_path, allow_pickle=False) as cache:
+            if str(cache["signature"].item()) == json.dumps(signature, sort_keys=True):
+                islands = []
+                count = int(cache["island_count"].item())
+                for index in range(count):
+                    islands.append((int(cache[f"island_id_{index}"].item()),
+                                    cache[f"triangles_{index}"].copy()))
+                return islands, tuple(cache["bounds"].tolist())
+    except (OSError, ValueError, KeyError):
+        pass
+
+    islands = []
+    for island_id in range(pathfinder.num_islands):
+        vertices = np.asarray(pathfinder.build_navmesh_vertices(island_id)).reshape(-1, 3, 3)
+        if len(vertices):
+            islands.append((island_id, vertices))
+    all_triangles = np.concatenate([triangles for _, triangles in islands], axis=0)
+    bounds = (float(all_triangles[:, :, 0].min()), float(all_triangles[:, :, 0].max()),
+              float(all_triangles[:, :, 2].min()), float(all_triangles[:, :, 2].max()))
+    arrays = {"signature": np.asarray(json.dumps(signature, sort_keys=True)),
+              "island_count": np.asarray(len(islands)), "bounds": np.asarray(bounds)}
+    for index, (island_id, triangles) in enumerate(islands):
+        arrays[f"island_id_{index}"] = np.asarray(island_id)
+        arrays[f"triangles_{index}"] = triangles
+    try:
+        np.savez_compressed(cache_path, **arrays)
+    except OSError:
+        # 只读场景目录仍可照常运行，缓存只是性能优化。
+        pass
+    return islands, bounds
+
+
+def _load_static_base(mesh_path, config, cache_dir):
+    """读取或重建 mesh 颜色栅格缓存，供批次内每条路线共享。"""
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = _static_visualization_key(cache_dir / "wanda.navmesh", mesh_path, config,
+                                    include_navmesh=False)
+    cache_path = cache_dir / f".mesh_topdown_{key['key'][:20]}.npz"
+    try:
+        with np.load(cache_path, allow_pickle=False) as cache:
+            base = cache["base"].copy()
+            extent = tuple(cache["extent"].tolist())
+            coordinates = json.loads(str(cache["coordinates"].item()))
+            return base, extent, coordinates
+    except (OSError, ValueError, KeyError):
+        pass
+
+    from plyfile import PlyData
+    mesh = PlyData.read(str(mesh_path))["vertex"].data
+    coords = np.column_stack([mesh["x"], mesh["z"]]).astype(np.float32)
+    colors = np.column_stack([mesh["red"], mesh["green"], mesh["blue"]]).astype(np.float32) / 255.0
+    mesh_bounds = ((float(mesh["x"].min()), float(mesh["x"].max())),
+                   (float(mesh["z"].min()), float(mesh["z"].max())))
+    visual, output = config["visualization"], config["output"]
+    base, _, extent = _pixel_colors(coords, colors, mesh_bounds,
+                                    visual.get("topdown_pixel_size_m", 0.06),
+                                    output.get("topdown_max_points"),
+                                    0,
+                                    visual.get("topdown_smoothing_px", 1))
+    coordinates = {"coordinate_frame": "Habitat X/Z, meters",
+                   "extent_xmin_xmax_zmin_zmax": list(extent), "origin": "upper",
+                   "shape_hw": list(base.shape[:2]),
+                   "pixel_size_x_m": (extent[1] - extent[0]) / base.shape[1],
+                   "pixel_size_z_m": (extent[3] - extent[2]) / base.shape[0],
+                   "note": "第一行对应 Z 最大侧，第一列对应 X 最小侧；颜色聚合不改变碰撞 mesh。"}
+    try:
+        np.savez_compressed(cache_path, base=base, extent=np.asarray(extent),
+                            coordinates=np.asarray(json.dumps(coordinates, ensure_ascii=False)))
+    except OSError:
+        pass
+    return base, extent, coordinates
+
+
 def save_gaussian_navmesh_overlay(rgb, island_triangles, bounds, output_path, config):
     """将 Habitat-GS 真实俯视相机 RGB 与全岛 NavMesh 按同一范围叠加。"""
     import matplotlib
@@ -119,15 +227,8 @@ def topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, isl
     scene_dir = Path(scene_dir)
     visual, output = config["visualization"], config["output"]
 
-    island_triangles = []
-    for island_id in range(pathfinder.num_islands):
-        vertices = np.asarray(pathfinder.build_navmesh_vertices(island_id)).reshape(-1, 3, 3)
-        if len(vertices):
-            island_triangles.append((island_id, vertices))
+    island_triangles, nav_bounds = _load_cached_navmesh(pathfinder, scene_dir / "wanda.navmesh")
     trajectory = np.asarray([frame[0] for frame in frames])
-    all_triangles = np.concatenate([tri for _, tri in island_triangles], axis=0)
-    nav_bounds = (float(all_triangles[:, :, 0].min()), float(all_triangles[:, :, 0].max()),
-                  float(all_triangles[:, :, 2].min()), float(all_triangles[:, :, 2].max()))
 
     if output["trajectory_topdown"]:
         fig, ax = plt.subplots()
@@ -150,29 +251,15 @@ def topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, isl
     mesh_path = Path(stage["collision_asset"])
     if not mesh_path.is_absolute():
         mesh_path = scene_dir / mesh_path
-    max_points = output.get("topdown_max_points")
-    pixel_size = visual.get("topdown_pixel_size_m", 0.06)
     bounds = (nav_bounds[0], nav_bounds[1], nav_bounds[2], nav_bounds[3])
 
     if output["mesh_navmesh_overlay"]:
-        mesh = PlyData.read(str(mesh_path))["vertex"].data
-        coords = np.column_stack([mesh["x"], mesh["z"]]).astype(np.float32)
-        colors = np.column_stack([mesh["red"], mesh["green"], mesh["blue"]]).astype(np.float32) / 255.0
-        mesh_bounds = ((float(mesh["x"].min()), float(mesh["x"].max())),
-                       (float(mesh["z"].min()), float(mesh["z"].max())))
-        base, occupied, extent = _pixel_colors(coords, colors, mesh_bounds, pixel_size,
-                                                max_points, config["navigation"]["seed"],
-                                                visual.get("topdown_smoothing_px", 1))
+        base, extent, coordinates = _load_static_base(mesh_path, config, scene_dir)
         # 原始米制栅格独立保存：放大查看不受绘图页边距/图例挤压影响。
         from PIL import Image
         Image.fromarray(np.uint8(np.clip(base, 0, 1) * 255)).save(output_dir / "mesh_topdown_base.png")
-        (output_dir / "mesh_topdown_coordinates.json").write_text(json.dumps({
-            "coordinate_frame": "Habitat X/Z, meters", "extent_xmin_xmax_zmin_zmax": list(extent),
-            "origin": "upper", "shape_hw": list(base.shape[:2]),
-            "pixel_size_x_m": (extent[1]-extent[0])/base.shape[1],
-            "pixel_size_z_m": (extent[3]-extent[2])/base.shape[0],
-            "note": "第一行对应 Z 最大侧，第一列对应 X 最小侧；颜色聚合不改变碰撞 mesh。"
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        (output_dir / "mesh_topdown_coordinates.json").write_text(
+            json.dumps(coordinates, ensure_ascii=False, indent=2), encoding="utf-8")
         fig, ax = plt.subplots()
         ax.imshow(base, extent=extent, origin="upper", interpolation="nearest")
         for _, tri in island_triangles:

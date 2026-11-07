@@ -48,7 +48,7 @@ def run_one(args, config, render_sim=None):
     pathfinder.seed(config["navigation"]["seed"])
     assert pathfinder.navigable_area > 10
     largest_island = int(np.argmax([pathfinder.island_area(i) for i in range(pathfinder.num_islands)]))
-    path, island = choose_route(pathfinder, config)
+    path, island = choose_route(pathfinder, config, navmesh_path=navmesh_path)
     points = np.asarray(path.points, dtype=np.float32)
     camera_prior = load_camera_trajectory(config)
     camera_buffer_ok = route_within_camera_buffer(
@@ -188,6 +188,7 @@ def run_one(args, config, render_sim=None):
                         Image.fromarray(rgb).save(output_dir / f"rgb_{index:04d}.png")
                     camera_position = position + np.array([0, config["motion"]["camera_height_m"], 0])
                     frame_records.append({"frame_index": index, "timestamp_s": float(timestamp),
+                                          "agent_position": [float(x) for x in position],
                                           "position": [float(x) for x in camera_position],
                                           "xyzw": quaternion_xyzw(state.rotation)})
                     if index % 100 == 0:
@@ -213,13 +214,15 @@ def run_one(args, config, render_sim=None):
                 "coordinate_frame": {
                     "name": "Y-up",
                     "position_unit": "m",
-                    "orientation_format": "quaternion_xyzw",
+                    "orientation_format": "xyzw",
                 },
                 "route": {
                     "route_id": output_dir.name,
                     "seed": int(config["navigation"]["seed"]),
-                    "start": {"position": frame_records[0]["position"]},
-                    "goal": {"position": [float(x) for x in points[-1]]},
+                    "start": {"agent_position": [float(x) for x in points[0]],
+                              "camera_position": frame_records[0]["position"]},
+                    "goal": {"agent_position": [float(x) for x in points[-1]],
+                             "camera_position": [float(x) for x in frame_records[-1]["position"]]},
                     "path_length": float(path.geodesic_distance),
                 },
                 "camera": {
@@ -227,6 +230,14 @@ def run_one(args, config, render_sim=None):
                     "width": int(camera["width"]),
                     "height": int(camera["height"]),
                     "hfov_deg": float(camera["hfov_deg"]),
+                },
+                "motion": {
+                    "model": config["motion"].get("model", "differential_drive"),
+                    "frame_rate_fps": int(config["motion"]["fps"]),
+                    "max_linear_speed_mps": float(config["motion"]["linear_speed_mps"]),
+                    "max_acceleration_mps2": float(config["motion"]["max_acceleration_mps2"]),
+                    "max_deceleration_mps2": float(config["motion"]["max_deceleration_mps2"]),
+                    "max_angular_speed_radps": float(config["motion"]["angular_speed_radps"]),
                 },
                 "frames": frame_records,
             }

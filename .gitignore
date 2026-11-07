@@ -38,3 +38,9 @@ deployment/results_fullres/
 # 本地 50 条全场景新配置验证结果，包含视频和大型可视化 HTML
 deployment/results_full_v020/
 deployment/pose_schema_smoke/
+deployment/scene/.wanda_navmesh_visual_cache.npz
+deployment/scene_crop/.wanda_navmesh_visual_cache.npz
+deployment/scene_fullres/.wanda_navmesh_visual_cache.npz
+deployment/scene/**/.mesh_topdown_*.npz
+deployment/scene_crop/**/.mesh_topdown_*.npz
+deployment/scene_fullres/**/.mesh_topdown_*.npz

@@ -7,9 +7,11 @@ import habitat_sim as hs
 import numpy as np
 import yaml
 from habitat_sim.utils.common import quat_from_angle_axis
+from .motion import build_linear_segment, yaw_steps
 
 
 ROOT = Path(__file__).resolve().parents[2]
+_SNAPPED_CANDIDATE_CACHE = {}
 
 
 def resolve_path(value):
@@ -25,6 +27,8 @@ def load_config(path):
     motion, camera = config["motion"], config["camera"]
     nav = config["navigation"]
     assert motion["linear_speed_mps"] > 0 and motion["angular_speed_radps"] > 0
+    for key in ("max_acceleration_mps2", "max_deceleration_mps2"):
+        assert motion.get(key, 0) > 0, f"motion.{key} 必须为正数"
     assert motion["fps"] > 0 and camera["width"] > 0 and camera["height"] > 0
     assert config["navmesh"]["agent_width_m"] > 0 and config["navmesh"]["agent_height_m"] > 0
     assert nav["sample_attempts"] > 0
@@ -62,11 +66,14 @@ def load_camera_trajectory(config):
     if not nav.get("use_camera_trajectory_prior", False):
         return None
     path = resolve_path(nav["camera_trajectory_file"])
-    return _load_camera_trajectory_file(str(path.resolve()))
+    path = path.resolve()
+    stat = path.stat()
+    # 将文件大小和修改时间纳入缓存键，避免用户替换 cameras.json 后继续使用旧轨迹。
+    return _load_camera_trajectory_file(str(path), stat.st_size, stat.st_mtime_ns)
 
 
 @lru_cache(maxsize=4)
-def _load_camera_trajectory_file(path_string):
+def _load_camera_trajectory_file(path_string, file_size, file_mtime_ns):
     """批次中复用已解析的 JSON 与 KD-tree，避免每条路线重复读取大文件。"""
     import json
     from scipy.spatial import cKDTree
@@ -105,7 +112,36 @@ def route_within_camera_buffer(points, camera_prior, buffer_m, sample_spacing_m=
     return bool(np.all(distances <= buffer_m + 1e-6))
 
 
-def choose_route(pathfinder, config):
+def _snapped_camera_candidates(pathfinder, camera_prior, navmesh_path, snap_limit):
+    """缓存相机轨迹吸附结果；NavMesh 或先验文件变化时自动换缓存键。"""
+    nav_path = Path(navmesh_path).resolve()
+    camera_path = Path(camera_prior["source_file"]).resolve()
+    nav_stat, camera_stat = nav_path.stat(), camera_path.stat()
+    key = (str(nav_path), nav_stat.st_size, nav_stat.st_mtime_ns,
+           str(camera_path), camera_stat.st_size, camera_stat.st_mtime_ns,
+           round(float(snap_limit), 6))
+    cached = _SNAPPED_CANDIDATE_CACHE.get(key)
+    if cached is not None:
+        return cached[0].copy(), cached[1].copy()
+
+    points = []
+    for position in camera_prior["positions"]:
+        point = np.asarray(pathfinder.snap_point(position.astype(np.float32)), dtype=np.float64)
+        if (np.isfinite(point).all()
+                and np.linalg.norm(point[[0, 2]] - position[[0, 2]]) <= snap_limit
+                and pathfinder.get_island(point) >= 0):
+            points.append(point)
+    if not points:
+        raise RuntimeError("cameras.json 轨迹点无法吸附到 NavMesh；请检查坐标变换/高度或关闭轨迹端点优先")
+    points = np.asarray(points)
+    islands = np.asarray([pathfinder.get_island(point) for point in points], dtype=np.int64)
+    if len(_SNAPPED_CANDIDATE_CACHE) >= 4:
+        _SNAPPED_CANDIDATE_CACHE.pop(next(iter(_SNAPPED_CANDIDATE_CACHE)))
+    _SNAPPED_CANDIDATE_CACHE[key] = (points, islands)
+    return points.copy(), islands.copy()
+
+
+def choose_route(pathfinder, config, navmesh_path=None):
     """按岛面积和三角面采样起终点，再以真实测地距离筛选路线。"""
     nav = config["navigation"]
     camera_prior = load_camera_trajectory(config)
@@ -129,18 +165,12 @@ def choose_route(pathfinder, config):
         rng = np.random.default_rng(nav["seed"])
         trajectory_candidates = []
         if camera_prior is not None and nav.get("prefer_camera_trajectory_endpoints", True):
-            # 轨迹相机中心只用 XYZ 位置，逐点吸附到可走面后丢弃超出邻近阈值的点。
+            # 轨迹相机中心只用 XYZ 位置，吸附结果按 NavMesh/轨迹文件状态缓存。
             snap_limit = max(float(nav["camera_trajectory_buffer_m"]), 1.0)
-            for position in camera_prior["positions"]:
-                point = np.asarray(pathfinder.snap_point(position.astype(np.float32)), dtype=np.float64)
-                if (np.isfinite(point).all()
-                        and np.linalg.norm(point[[0, 2]] - position[[0, 2]]) <= snap_limit
-                        and pathfinder.get_island(point) >= 0):
-                    trajectory_candidates.append(point)
-            if not trajectory_candidates:
-                raise RuntimeError("cameras.json 轨迹点无法吸附到 NavMesh；请检查坐标变换/高度或关闭轨迹端点优先")
-            trajectory_candidates = np.asarray(trajectory_candidates)
-            trajectory_islands = np.asarray([pathfinder.get_island(p) for p in trajectory_candidates])
+            navmesh_path = (Path(navmesh_path) if navmesh_path is not None else
+                            resolve_path(config["scene"]["directory"]) / "wanda.navmesh")
+            trajectory_candidates, trajectory_islands = _snapped_camera_candidates(
+                pathfinder, camera_prior, navmesh_path, snap_limit)
             allowed_islands = np.asarray(islands, dtype=np.int64)
             keep = np.isin(trajectory_islands, allowed_islands)
             trajectory_candidates = trajectory_candidates[keep]
@@ -193,45 +223,36 @@ def choose_route(pathfinder, config):
 
 
 def build_motion(pathfinder, points, config):
-    """按线速度和角速度限制推进代理，并以 try_step 将每步约束在 NavMesh 上。"""
+    """差速/全向底盘运动：直线梯形速度曲线，停车后限角速度原地转向。"""
     motion = config["motion"]
     dt = 1.0 / motion["fps"]
-    max_step = motion["linear_speed_mps"] * dt
+    max_speed = motion["linear_speed_mps"]
+    acceleration = motion["max_acceleration_mps2"]
+    deceleration = motion["max_deceleration_mps2"]
     max_turn = motion["angular_speed_radps"] * dt
-    position = np.asarray(points[0], dtype=np.float64)
+    points = np.asarray(points, dtype=np.float64)
+    if len(points) < 2:
+        raise ValueError("导航路径至少需要两个点")
+    position = points[0].copy()
     delta = points[1] - points[0]
     yaw = math.atan2(-delta[0], -delta[2])
     frames = [(position.copy(), yaw, 0.0)]
     for target in points[1:]:
         target = np.asarray(target, dtype=np.float64)
         delta = target - position
+        distance = float(np.linalg.norm(delta))
+        if distance < 1e-6:
+            continue
         desired = math.atan2(-delta[0], -delta[2])
-        # 转折点先原地转向，再沿测地线段前进；不会因平滑转向而切入障碍物。
         angle = (desired - yaw + math.pi) % (2 * math.pi) - math.pi
-        turns = int(math.ceil(abs(angle) / max_turn))
-        for _ in range(turns):
-            yaw += angle / turns
+        for yaw in yaw_steps(yaw, desired, motion["angular_speed_radps"], dt):
             frames.append((position.copy(), yaw, len(frames) * dt))
-        remaining = float(np.linalg.norm(target - position))
-        # 以小于速度上限的增量推进；发生投影时保留实际位置，不跨越障碍物强行吸附。
-        while remaining > 0.03:
-            delta = target - position
-            distance = float(np.linalg.norm(delta))
-            increment = min(max_step * 0.8, distance)
-            wanted = position + delta * (increment / distance)
-            actual = np.asarray(pathfinder.try_step(position.astype(np.float32), wanted.astype(np.float32)), dtype=np.float64)
-            moved = float(np.linalg.norm(actual - position))
-            if moved < 1e-4:
-                raise RuntimeError("NavMesh 阻挡路径推进；此路线不适合当前代理宽度")
-            if moved > max_step + 1e-6:
-                raise RuntimeError("NavMesh 单步投影超过速度上限")
-            if not pathfinder.is_navigable(actual.astype(np.float32), 0.15):
-                raise RuntimeError("移动点离开 NavMesh")
-            position = actual
-            frames.append((position.copy(), yaw, len(frames) * dt))
-            remaining = float(np.linalg.norm(target - position))
-            if len(frames) > 200000:
-                raise RuntimeError("路线推进超过安全帧数上限")
+        # 固定 fps 的梯形速度序列，起终速度为零，满足线加速度与制动上限。
+        delta = target - position
+        distance = float(np.linalg.norm(delta))
+        direction = delta / distance
+        segment_frames, position, _ = build_linear_segment(
+            position, target, yaw, frames[-1][2], motion["fps"], max_speed,
+            acceleration, deceleration, pathfinder.try_step, pathfinder.is_navigable)
+        frames.extend(segment_frames)
     return frames
-
-

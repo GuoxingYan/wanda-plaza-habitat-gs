@@ -12,6 +12,33 @@ import habitat_sim as hs
 import magnum as mn
 
 
+def required_route_outputs(output_config):
+    """根据本次启用的输出类型返回续跑时必须存在的文件。"""
+    required = ["validation.json"]
+    for enabled, filename in (
+        ("video", "navigation_rgb.mp4"),
+        ("poses_json", "navigation_poses.json"),
+        ("trajectory_topdown", "trajectory_topdown.png"),
+        ("mesh_navmesh_overlay", "mesh_navmesh_topdown.png"),
+        ("gaussian_navmesh_overlay", "gaussian_topdown_raw.png"),
+        ("gaussian_navmesh_overlay", "gaussian_navmesh_topdown.png"),
+    ):
+        if output_config.get(enabled, False):
+            required.append(filename)
+    return required
+
+
+def is_route_complete(route_dir, report, config):
+    """判断路线是否可续跑跳过，避免关闭视频时仍要求 RGB 帧统计。"""
+    output_config = config["output"]
+    if report.get("config") != config:
+        return False
+    if output_config.get("video", True) and report.get("rgb_frames", 0) <= 0:
+        return False
+    return all((Path(route_dir) / name).is_file()
+               for name in required_route_outputs(output_config))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, default=Path(__file__).resolve().parents[1] / 'config.yaml')
@@ -87,14 +114,9 @@ def main():
         run_args.output.mkdir(parents=True, exist_ok=True)
         done_file = run_args.output / 'validation.json'
         report = json.loads(done_file.read_text()) if done_file.exists() else {}
-        required = ['validation.json', 'navigation_rgb.mp4', 'navigation_poses.json',
-                    'trajectory_topdown.png', 'mesh_navmesh_topdown.png']
-        if current['output'].get('gaussian_navmesh_overlay', False):
-            required.extend(['gaussian_topdown_raw.png', 'gaussian_navmesh_topdown.png'])
+        required = required_route_outputs(current['output'])
         if (not args.force and not (run_args.output / 'failure.json').exists()
-                and report.get('rgb_frames', 0) > 0
-                and report.get('config') == current
-                and all((run_args.output / name).is_file() for name in required)):
+                and is_route_complete(run_args.output, report, current)):
             print(f'[{index + 1}/{count}] skip completed {run_args.output}', flush=True)
             continue
         # 每条结果保存实际生效配置，便于复现实验及查看可视化参数。
