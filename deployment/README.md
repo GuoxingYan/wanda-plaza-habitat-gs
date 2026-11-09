@@ -22,7 +22,7 @@ bash deployment/run_validation.sh --config deployment/config.yaml --scene-dir de
 
 默认采集轨迹先验开启：路线每 0.5 m 采样检查距 `cameras.json` 相机中心轨迹的 X/Z 平面距离，要求全路径都位于默认 **10 m 缓冲区**内。采集轨迹本身按源 Z-up 转为 Habitat `(x,z,-y)`。可以在 YAML 中关闭先验、改缓冲半径或关闭端点优先；详细解释见 [VISUALIZATION.md](VISUALIZATION.md)。
 
-运动学使用 `motion.model: differential_drive`：每段直线采用固定帧率三角/梯形速度曲线，受最大线速度、加速度和制动减速度约束；路径转折处停车后原地转向，受最大角速度约束。位置仍经 PathFinder `try_step` 限制在 NavMesh 上。该模型适用于差速/全向底盘的简化仿真，不适用于汽车式最小转弯半径约束。逐帧相机位姿写入 `navigation_poses.json`：`coordinate_frame` 描述 Y-up 坐标和单位，`route` 保存代理起终点、对应相机起终点及 `path_length`（米），`camera` 保存 D435 RGB 参数，`frames` 保存帧序号、模拟时间、代理地面位置、相机位置和 `xyzw` 四元数。四元数顺序为 x、y、z、w；每帧 `agent_position` 是代理地面位置，`position` 是相机位置。
+运动学使用 `motion.model: differential_drive`：每段直线采用固定帧率三角/梯形速度曲线，受最大线速度、加速度和制动减速度约束；路径转折处停车后原地转向，受最大角速度约束。位置仍经 PathFinder `try_step` 限制在 NavMesh 上。该模型适用于差速/全向底盘的简化仿真，不适用于汽车式最小转弯半径约束。`navigation_poses.json` 只包含相机信息：`coordinate_frame` 描述 Y-up 坐标和单位，`route.start` / `route.goal` 保存相机起终点位置及 `path_length`（米），`camera` 保存 D435 RGB 参数，`frames` 保存帧序号、模拟时间、相机位置和 `xyzw` 四元数。四元数顺序为 x、y、z、w。代理位置和运动学参数只用于内部导航及可行性校验，不写入位姿 JSON。
 
 输入文件位于 `Wanda Plaza/`（链接到 `/data/data/Wanda Plaza`）。原文件不修改。
 
@@ -38,7 +38,7 @@ python deployment/prepare_scene.py --crop -50 10 -40 20 --out deployment/scene_c
 
 ## 验证输出
 
-`scene/wanda.navmesh` 是完整场景 NavMesh。`results_full/route_*/validation.json` 为逐路线报告；`trajectory_topdown.png` 展示 NavMesh、轨迹和起终点；`mesh_navmesh_topdown.png` 是彩色 mesh 聚合底图与 NavMesh 叠图；`mesh_topdown_base.png` 和 `mesh_topdown_coordinates.json` 提供纯底图及坐标映射；`mesh_navmesh_detail_*.png` 是 YAML 指定区域的放大图。将 `output.gaussian_navmesh_overlay` 打开后才额外生成 `gaussian_topdown_raw.png` 和 `gaussian_navmesh_topdown.png`，因为高分辨率俯视 Gaussian 会增加显存和渲染时间。`path.npy` 为 geodesic 转折点，`trajectory.npy` 为经 `PathFinder.try_step` 约束的逐帧轨迹；`navigation_poses.json` 记录逐帧相机/代理位姿；`navigation_rgb.mp4` 和 `rgb_*.png` 来自 CUDA Gaussian Splatting。
+`scene/wanda.navmesh` 是完整场景 NavMesh。`results_full/route_*/validation.json` 为逐路线报告；`trajectory_topdown.png` 展示 NavMesh、轨迹和起终点；`mesh_navmesh_topdown.png` 是彩色 mesh 聚合底图与 NavMesh 叠图；`mesh_topdown_base.png` 和 `mesh_topdown_coordinates.json` 提供纯底图及坐标映射；`mesh_navmesh_detail_*.png` 是 YAML 指定区域的放大图。将 `output.gaussian_navmesh_overlay` 打开后才额外生成 `gaussian_topdown_raw.png` 和 `gaussian_navmesh_topdown.png`，因为高分辨率俯视 Gaussian 会增加显存和渲染时间。`path.npy` 为 geodesic 转折点，`trajectory.npy` 为内部逐帧代理轨迹；`navigation_poses.json` 只记录逐帧相机位姿，不含代理位置；`navigation_rgb.mp4` 和 `rgb_*.png` 来自 CUDA Gaussian Splatting。
 
 相机使用 D435 **RGB** 标称 HFOV=69°、640×360、安装高度1.5米，理想针孔，无畸变。不是深度相机的87°视场角，也不是实机逐台标定内参。默认坐标/mesh单位假定米。代理半径0.25米，高1.5米，爬升0.2米、坡度35°；NavMesh体素0.1×0.05米。路径导航是确定性geodesic跟随与NavMesh碰撞约束，不包含视觉策略、SLAM或运动控制器。
 

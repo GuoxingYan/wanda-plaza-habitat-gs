@@ -1,10 +1,29 @@
 """批量续跑所需文件集合的回归测试。"""
 import unittest
+import tempfile
+from pathlib import Path
 
 from wanda_nav.cli import is_route_complete, required_route_outputs
 
 
 class BatchResumeTest(unittest.TestCase):
+    def test_old_pose_schema_is_not_considered_complete(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {"output": {"video": False, "poses_json": True,
+                                  "trajectory_topdown": False,
+                                  "mesh_navmesh_overlay": False,
+                                  "gaussian_navmesh_overlay": False}}
+            report = {"config": config}
+            (root / "validation.json").touch()
+            (root / "navigation_poses.json").write_text(json.dumps({
+                "route": {"start": {"agent_position": [0, 0, 0]},
+                          "goal": {"agent_position": [1, 0, 0]}},
+                "frames": [{"agent_position": [0, 0, 0], "position": [0, 1, 0]}],
+            }), encoding="utf-8")
+            self.assertFalse(is_route_complete(root, report, config))
+
     def test_video_disabled_does_not_require_mp4(self):
         files = required_route_outputs({"video": False, "poses_json": True,
                                         "trajectory_topdown": True,
@@ -32,14 +51,13 @@ class BatchResumeTest(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        config = {"output": {"video": False, "poses_json": True,
+        config = {"output": {"video": False, "poses_json": False,
                              "trajectory_topdown": False,
                              "mesh_navmesh_overlay": False,
                              "gaussian_navmesh_overlay": False}}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "validation.json").touch()
-            (root / "navigation_poses.json").touch()
             report = {"config": config, "rgb_frames": 0}
             self.assertTrue(is_route_complete(root, report, config))
 

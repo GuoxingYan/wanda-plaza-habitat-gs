@@ -188,8 +188,7 @@ def run_one(args, config, render_sim=None):
                         Image.fromarray(rgb).save(output_dir / f"rgb_{index:04d}.png")
                     camera_position = position + np.array([0, config["motion"]["camera_height_m"], 0])
                     frame_records.append({"frame_index": index, "timestamp_s": float(timestamp),
-                                          "agent_position": [float(x) for x in position],
-                                          "position": [float(x) for x in camera_position],
+                                          "camera_position": [float(x) for x in camera_position],
                                           "xyzw": quaternion_xyzw(state.rotation)})
                     if index % 100 == 0:
                         print(f"Rendered {index}/{len(frames)} frames", flush=True)
@@ -219,10 +218,8 @@ def run_one(args, config, render_sim=None):
                 "route": {
                     "route_id": output_dir.name,
                     "seed": int(config["navigation"]["seed"]),
-                    "start": {"agent_position": [float(x) for x in points[0]],
-                              "camera_position": frame_records[0]["position"]},
-                    "goal": {"agent_position": [float(x) for x in points[-1]],
-                             "camera_position": [float(x) for x in frame_records[-1]["position"]]},
+                    "start": {"camera_position": frame_records[0]["camera_position"]},
+                    "goal": {"camera_position": frame_records[-1]["camera_position"]},
                     "path_length": float(path.geodesic_distance),
                 },
                 "camera": {
@@ -230,14 +227,6 @@ def run_one(args, config, render_sim=None):
                     "width": int(camera["width"]),
                     "height": int(camera["height"]),
                     "hfov_deg": float(camera["hfov_deg"]),
-                },
-                "motion": {
-                    "model": config["motion"].get("model", "differential_drive"),
-                    "frame_rate_fps": int(config["motion"]["fps"]),
-                    "max_linear_speed_mps": float(config["motion"]["linear_speed_mps"]),
-                    "max_acceleration_mps2": float(config["motion"]["max_acceleration_mps2"]),
-                    "max_deceleration_mps2": float(config["motion"]["max_deceleration_mps2"]),
-                    "max_angular_speed_radps": float(config["motion"]["angular_speed_radps"]),
                 },
                 "frames": frame_records,
             }

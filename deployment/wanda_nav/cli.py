@@ -35,6 +35,18 @@ def is_route_complete(route_dir, report, config):
         return False
     if output_config.get("video", True) and report.get("rgb_frames", 0) <= 0:
         return False
+    if output_config.get("poses_json", True):
+        try:
+            import json
+            pose_data = json.loads((Path(route_dir) / "navigation_poses.json").read_text(encoding="utf-8"))
+            if (any("agent_position" in endpoint for endpoint in
+                    (pose_data["route"]["start"], pose_data["route"]["goal"]))
+                    or any("agent_position" in frame or "position" in frame
+                           or "camera_position" not in frame
+                           for frame in pose_data["frames"])):
+                return False
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
     return all((Path(route_dir) / name).is_file()
                for name in required_route_outputs(output_config))
 
