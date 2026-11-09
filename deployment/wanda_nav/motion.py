@@ -82,8 +82,12 @@ def build_linear_segment(start, target, start_yaw, start_time, fps,
         moved = float(np.linalg.norm(actual - position))
         if moved < 1e-5 and remaining > 1e-5:
             raise RuntimeError("NavMesh 阻挡路径推进；此路线不适合当前代理宽度")
-        if moved > max_speed * dt + 1e-6:
-            raise RuntimeError(f"NavMesh 单步投影超过速度上限: {moved:.6f} > {max_speed * dt:.6f}")
+        max_step = max_speed * dt
+        if moved > max_step:
+            # try_step 可能因 NavMesh 投影和单精度计算返回略长于目标的点。
+            # 将投影位移截断到运动学上限，再做可行性检查，避免把数值误差误判为路线失败。
+            actual = position + (actual - position) * (max_step / moved)
+            moved = max_step
         if not is_navigable(actual.astype(np.float32), 0.15):
             raise RuntimeError("移动点离开 NavMesh")
         position = actual
