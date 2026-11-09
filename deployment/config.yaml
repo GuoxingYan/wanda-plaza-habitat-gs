@@ -7,11 +7,13 @@ scene:
 
 navmesh:
   # Recast 水平栅格边长；越小越精细，但烘焙更慢、内存占用更高。
-  cell_size_m: 0.1
+  cell_size_m: 0.05
   # Recast 垂直栅格高度；影响台阶和地面高度表达精度。
   cell_height_m: 0.05
   # 机器人/行人代理总宽度；半径由宽度的一半计算，用于墙边安全距离。
-  agent_width_m: 0.5
+  agent_width_m: 0.75
+  # 额外障碍物净距；烘焙半径=机体半宽+此值，窄路中路线中心会更远离边缘和障碍。
+  obstacle_clearance_m: 0.15
   # 代理碰撞高度；低于此高度的空间会被判为不可通行。
   agent_height_m: 1.5
   # 可跨越的最大垂直台阶高度。
@@ -32,6 +34,13 @@ navigation:
   camera_trajectory_buffer_m: 10.0
   # 起点/终点优先从采集相机中心位置投影到 NavMesh 后选取；false 时只用三角面面积加权采样。
   prefer_camera_trajectory_endpoints: true
+  # 是否按 cameras.json 在每个 NavMesh 连通岛上的采集密度过滤路线候选；默认开启。
+  # 关闭时仍保留原有轨迹缓冲区约束，但不会因为某个岛采集点稀少而排除该岛。
+  use_camera_trajectory_density_filter: true
+  # 一个连通岛至少需要吸附成功的采集轨迹点数；用于排除偶然落入的孤立区域。
+  camera_trajectory_density_min_points: 20
+  # 每 100 平方米至少需要的采集点数；同时满足绝对点数和密度阈值才保留。
+  camera_trajectory_density_min_points_per_100m2: 0.5
   # 最短路径允许的最小测地距离（米）。
   min_route_length_m: 15.0
   # 最短路径允许的最大测地距离（米）。
@@ -86,6 +95,8 @@ output:
   mesh_navmesh_overlay: true
   # 是否生成真实 Habitat-GS 俯视渲染与逐顶点投影 NavMesh 叠加图；高分辨率额外渲染开销较大。
   gaussian_navmesh_overlay: false
+  # 是否输出 cameras.json 轨迹密度过滤开启/关闭的并排对比图。
+  camera_trajectory_density_comparison: true
   # 是否额外保存首帧、中间帧、末帧 RGB PNG。
   rgb_keyframes: true
   # mesh 顶视颜色底图的最大输入顶点数；null 表示使用全部顶点。

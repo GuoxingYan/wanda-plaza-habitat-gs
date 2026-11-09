@@ -3,15 +3,18 @@ scene:
   # 裁剪场景目录；其中应包含同规格裁剪的 mesh、Gaussian PLY 和 stage 配置。
   directory: deployment/scene_fullres
   # true 时从碰撞 mesh 重新烘焙并覆盖 NavMesh；false 时复用已有 NavMesh。
-  bake_navmesh: false
+  bake_navmesh: true
 
 navmesh:
   # Recast 水平栅格边长；越小越精细，但烘焙更慢、内存占用更高。
-  cell_size_m: 0.1
+  cell_size_m: 0.05
   # Recast 垂直栅格高度；影响台阶和地面高度表达精度。
   cell_height_m: 0.05
   # 机器人/行人代理总宽度；半径由宽度的一半计算，用于墙边安全距离。
-  agent_width_m: 0.5
+  agent_width_m: 0.75
+  # 额外障碍物净距；NavMesh代理半径将为0.75/2+0.15=0.525米。
+  # 该余量会收缩窄路可行区域，让路线中心尽量远离墙面、立柱和其他障碍。
+  obstacle_clearance_m: 0.15
   # 代理碰撞高度；低于此高度的空间会被判为不可通行。
   agent_height_m: 1.5
   # 可跨越的最大垂直台阶高度。
@@ -32,6 +35,12 @@ navigation:
   camera_trajectory_buffer_m: 10.0
   # 起点/终点优先从采集相机中心位置投影到 NavMesh 后选取；false 时只用三角面面积加权采样。
   prefer_camera_trajectory_endpoints: true
+  # 是否按 cameras.json 在每个 NavMesh 连通岛上的采集密度过滤路线候选；默认开启。
+  use_camera_trajectory_density_filter: true
+  # 一个连通岛至少需要吸附成功的采集轨迹点数。
+  camera_trajectory_density_min_points: 20
+  # 每 100 平方米至少需要的采集点数；同时满足绝对点数和密度阈值才保留。
+  camera_trajectory_density_min_points_per_100m2: 0.5
   # 最短路径允许的最小测地距离（米）。
   min_route_length_m: 15.0
   # 最短路径允许的最大测地距离（米）。
@@ -86,6 +95,8 @@ output:
   mesh_navmesh_overlay: true
   # 是否生成真实 Habitat-GS 俯视渲染与逐顶点投影 NavMesh 叠加图；高分辨率额外渲染开销较大。
   gaussian_navmesh_overlay: true
+  # 是否输出 cameras.json 轨迹密度过滤开启/关闭的并排对比图。
+  camera_trajectory_density_comparison: true
   # 是否额外保存首帧、中间帧、末帧 RGB PNG。
   rgb_keyframes: true
   # mesh 顶视颜色底图的最大输入顶点数；null 表示使用全部顶点。
@@ -117,8 +128,18 @@ visualization:
   mesh_overlay_alpha: 0.28
   # Gaussian 底图上 NavMesh 的透明度。
   gaussian_overlay_alpha: 0.42
-  # Gaussian 俯视渲染相机高度（米），需高于 NavMesh 包围盒顶部。
+  # Gaussian 正交俯视图高于 NavMesh 最高点的相机距离（米）；正交投影下该值只用于确定裁剪深度。
   gaussian_topdown_height_m: 80.0
+  # 俯视图只保留 NavMesh 高度范围上方此距离以内的 Gaussian，抑制树冠、建筑高层等漂浮投影。
+  gaussian_topdown_height_above_walkable_m: 2.0
+  # 俯视图只保留 NavMesh 最低高度下方此距离以内的 Gaussian，抑制地下噪声和远离地面的离群点。
+  gaussian_topdown_depth_below_walkable_m: 0.5
+  # 每个正交 Gaussian 俯视渲染块覆盖的世界边长；较小能更好适应起伏地面，渲染次数也更多。
+  gaussian_topdown_tile_size_m: 64.0
+  # 单个俯视渲染块的正方形像素分辨率；拼接后输出仍使用 image_width_px/image_height_px。
+  gaussian_topdown_tile_resolution_px: 768
+  # 正交相机离当前块可行走面中位高度的距离（米），与上下切片厚度共同决定渲染裁剪范围。
+  gaussian_topdown_camera_height_m: 8.0
   # 轨迹线颜色。
   trajectory_color: '#d62728'
   # 轨迹线宽，单位为绘图点。

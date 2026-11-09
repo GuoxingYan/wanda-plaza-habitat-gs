@@ -5,6 +5,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from wanda_nav.planning import (_SNAPPED_CANDIDATE_CACHE, _snapped_camera_candidates,
+                                _load_camera_trajectory_file, classify_camera_trajectory_islands,
                                 route_within_camera_buffer)
 
 
@@ -57,6 +58,38 @@ class CameraTrajectoryPriorTest(unittest.TestCase):
             self.assertEqual(second.calls, 0)
             np.testing.assert_array_equal(points, cached_points)
             np.testing.assert_array_equal(islands, cached_islands)
+
+    def test_density_filter_requires_points_and_area_density(self):
+        keep, counts, density = classify_camera_trajectory_islands(
+            np.array([100.0, 1000.0, 10.0]),
+            np.array([0] * 30 + [1] * 2 + [2] * 1),
+            min_points=5, min_points_per_100m2=1.0)
+        self.assertTrue(keep[0])
+        self.assertFalse(keep[1])
+        self.assertFalse(keep[2])
+        np.testing.assert_array_equal(counts, [30, 2, 1])
+        self.assertAlmostEqual(density[0], 30.0)
+
+    def test_capture_tracks_merge_cameras_per_frame_and_split_video_sequences(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        cameras = [
+            {"img_name": "VIDEO_A_000001_0", "position": [0.0, 0.0, 1.0]},
+            {"img_name": "VIDEO_A_000001_1", "position": [0.0, 0.0, 1.0]},
+            {"img_name": "VIDEO_A_000002_0", "position": [1.0, 0.0, 1.0]},
+            {"img_name": "VIDEO_B_000001_0", "position": [10.0, 0.0, 1.0]},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cameras.json"
+            path.write_text(json.dumps(cameras), encoding="utf-8")
+            prior = _load_camera_trajectory_file(str(path), path.stat().st_size,
+                                                 path.stat().st_mtime_ns)
+        self.assertEqual(len(prior["capture_segments"]), 2)
+        self.assertEqual([len(segment) for segment in prior["capture_segments"]], [2, 1])
+        np.testing.assert_allclose(prior["capture_segments"][0][:, 0], [0.0, 1.0])
+        np.testing.assert_allclose(prior["capture_segments"][1][:, 0], [10.0])
 
 
 if __name__ == "__main__":

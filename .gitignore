@@ -44,3 +44,5 @@ deployment/scene_fullres/.wanda_navmesh_visual_cache.npz
 deployment/scene/**/.mesh_topdown_*.npz
 deployment/scene_crop/**/.mesh_topdown_*.npz
 deployment/scene_fullres/**/.mesh_topdown_*.npz
+deployment/scene_topdown_crop/
+deployment/results_density_smoke/

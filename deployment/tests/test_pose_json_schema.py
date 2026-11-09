@@ -13,14 +13,14 @@ class NavigationPoseSchemaTest(unittest.TestCase):
             "route": {
                 "route_id": "route_0000",
                 "seed": 17,
-                "start": {"camera_position": [0.0, 1.5, 0.0]},
-                "goal": {"camera_position": [1.0, 1.5, 1.0]},
+                "start": {"position": [0.0, 1.5, 0.0], "xyzw": [0, 0, 0, 1]},
+                "goal": {"position": [1.0, 1.5, 1.0], "xyzw": [0, 0, 0, 1]},
                 "path_length": 12.3,
             },
             "camera": {"model": "D435 RGB nominal pinhole", "width": 640,
                        "height": 360, "hfov_deg": 69.0},
             "frames": [{"frame_index": 0, "timestamp_s": 0.0,
-                        "camera_position": [0.0, 1.5, 0.0],
+                        "position": [0.0, 1.5, 0.0],
                         "xyzw": [0.0, 0.0, 0.0, 1.0]}],
         }
         self.assertNotIn("schema_version", payload)
@@ -32,10 +32,12 @@ class NavigationPoseSchemaTest(unittest.TestCase):
         self.assertNotIn("geodesic_distance_m", payload["route"])
         self.assertNotIn("agent_position", payload["route"]["start"])
         self.assertNotIn("agent_position", payload["route"]["goal"])
+        self.assertEqual(set(payload["route"]["start"]), {"position", "xyzw"})
+        self.assertEqual(set(payload["route"]["goal"]), {"position", "xyzw"})
         self.assertEqual(set(payload["frames"][0]),
-                         {"frame_index", "timestamp_s", "camera_position", "xyzw"})
+                         {"frame_index", "timestamp_s", "position", "xyzw"})
         self.assertNotIn("agent_position", payload["frames"][0])
-        self.assertNotIn("position", payload["frames"][0])
+        self.assertNotIn("camera_position", payload["frames"][0])
         self.assertNotIn("motion", payload)
 
 

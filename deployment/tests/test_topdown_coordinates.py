@@ -1,7 +1,7 @@
 """用非对称四角颜色检测俯视底图的翻转和边界丢点。"""
 import unittest
 import numpy as np
-from wanda_nav.visualization import (_load_cached_navmesh, _pixel_colors,
+from wanda_nav.visualization import (_load_cached_navmesh, _mesh_image_extent, _pixel_colors,
                                      _static_visualization_key)
 from wanda_nav.visualization import project_navmesh_to_topdown_pixels
 
@@ -63,6 +63,14 @@ class TopdownCoordinatesTest(unittest.TestCase):
         np.testing.assert_allclose(image, [[colors[1], colors[3]], [colors[0], colors[2]]])
         self.assertTrue(occupied.all())
         self.assertEqual(extent, (0, 2, 0, 2))
+
+    def test_mesh_image_uses_standard_world_extent_with_upper_origin(self):
+        # origin=upper 将第 0 行放在 top=zmax；extent 仍须按 bottom/top 顺序传入。
+        extent = (-10.0, 20.0, -30.0, 40.0)
+        self.assertEqual(_mesh_image_extent(extent), (-10.0, 20.0, -30.0, 40.0))
+        image_row_zero_world_z = extent[3]
+        image_last_row_world_z = extent[2]
+        self.assertGreater(image_row_zero_world_z, image_last_row_world_z)
 
     def test_topdown_camera_projection_uses_pixel_xy(self):
         # 俯视相机向下看，世界 +Z 投影到图像上方，X 增大向右。

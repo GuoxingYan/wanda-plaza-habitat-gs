@@ -19,6 +19,8 @@ mesh 顶视栅格的坐标定义保存在 `mesh_topdown_coordinates.json`：第�
 
 `Wanda Plaza/cameras.json` 的 30,276 条记录含原始 Z-up 相机中心。系统只使用 `position`，不使用图像朝向；先按 `(x,y,z) -> (x,z,-y)` 转为 Habitat Y-up，再在 X/Z 平面建立距离查询。
 
+开启 `navigation.use_camera_trajectory_density_filter` 后，会在 NavMesh 连通岛层面统计吸附到各岛的采集相机位置，并过滤采集覆盖稀少的岛。必须同时达到 `camera_trajectory_density_min_points` 绝对点数和 `camera_trajectory_density_min_points_per_100m2` 面积密度（点/100 m²）。此处理只改变路线采样允许使用的岛，不修改原始 NavMesh 几何。每次运行输出 `camera_trajectory_density_comparison.png` 三列视图：前两列分别显示关闭和开启过滤的 NavMesh，并叠加彩色 mesh 纹理底图、实际导航轨迹、蓝色起点和橙色终点；第三列单独显示 `cameras.json` 采集轨迹和相机位置，不叠加当前导航路线。`cameras.json` 中同一视频帧的多个朝向相机先合并成一个中心点，再按视频片段和帧号分段连线，避免跨片段或同帧视角之间出现虚假直线。浅红色表示开启过滤后会剔除的轨迹稀疏区域，绿色表示保留区域。三列共用同一米制 X/Z 坐标映射，便于核对纹理、网格和路线是否对齐。过滤阈值和开关都在 YAML，可通过 `output.camera_trajectory_density_comparison` 单独关闭对比图。
+
 默认 YAML 设置：
 
 - `use_camera_trajectory_prior: true`：启用相机采集路线附近区域约束。

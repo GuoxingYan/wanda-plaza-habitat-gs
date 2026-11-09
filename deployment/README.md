@@ -1,5 +1,17 @@
 # Wanda Plaza / Habitat-GS
 
+室外场景导航数据生成与验证：从彩色 mesh 烘焙/加载 NavMesh，结合 `cameras.json` 采集轨迹筛选可用区域，生成带运动学约束的路线、D435 视角 Gaussian RGB 视频、位姿 JSON 和诊断可视化。
+
+## 可视化示例
+
+![采集轨迹密度过滤：原始 NavMesh、过滤 NavMesh 与采集路线独立视图](results_density_smoke/route_0000/camera_trajectory_density_comparison.png)
+
+![单条路线在 NavMesh 中的运行轨迹](results_density_smoke/route_0000/trajectory_topdown.png)
+
+![彩色 mesh 纹理与 NavMesh 叠加](results_density_smoke/route_0000/mesh_navmesh_topdown.png)
+
+最新 50 条全密度结果完成后，总览图和 HTML 报告位于 `results_fullres/batch_20261109_50/`。HTML 顶部的总览将 50 条导航轨迹以不同颜色叠加在同一张彩色 mesh 底图中，页面下方列出逐条结果与视频链接。
+
 独立 Conda 环境：`cloudrobo-habitat-gs`，Python 3.12，CUDA toolkit 12.4，RTX 3090。
 
 首次阅读建议从本文件开始；参数及图像判读见 [VISUALIZATION.md](VISUALIZATION.md)，逐次代码变更见 [CHANGELOG.md](CHANGELOG.md)。原始数据位于 `Wanda Plaza/`，该目录被 Git 忽略。
@@ -18,11 +30,28 @@ bash deployment/run_validation.sh --bake-only
 bash deployment/run_validation.sh --config deployment/config.yaml --scene-dir deployment/scene --output deployment/results_full
 ```
 
+### 生成全密度 50 条路线并汇总 HTML
+
+```bash
+bash deployment/run_validation.sh \
+  --config deployment/config_fullres_50.yaml \
+  --scene-dir deployment/scene_fullres \
+  --output deployment/results_fullres/batch_20261109_50 \
+  --skip-bake
+/data/anaconda3/envs/cloudrobo-habitat-gs/bin/python deployment/summarize_results.py \
+  --results deployment/results_fullres/batch_20261109_50 \
+  --output deployment/results_fullres/batch_20261109_50/summary.html
+```
+
+汇总器会额外生成 `all_routes_mesh_overlay.png`：每条路线使用独立颜色，蓝色圆点表示起点、橙色三角表示终点；该总览图和各路线可视化以内嵌图片方式显示在 HTML 中，视频仍使用相对链接，避免复制媒体文件。
+
 所有主要运行参数集中在 [config.yaml](config.yaml)，每个键都有中文说明。默认配置使用未裁剪的 `deployment/scene/`，线速度为 **3.0 m/s**，生成 **50 条**轨迹。指定起终点时使用 Habitat Y-up 世界坐标 `[x,y,z]`，必须同时提供；否则默认优先从 `cameras.json` 采集位置投影到 NavMesh 后抽取起终点。
 
 默认采集轨迹先验开启：路线每 0.5 m 采样检查距 `cameras.json` 相机中心轨迹的 X/Z 平面距离，要求全路径都位于默认 **10 m 缓冲区**内。采集轨迹本身按源 Z-up 转为 Habitat `(x,z,-y)`。可以在 YAML 中关闭先验、改缓冲半径或关闭端点优先；详细解释见 [VISUALIZATION.md](VISUALIZATION.md)。
 
-运动学使用 `motion.model: differential_drive`：每段直线采用固定帧率三角/梯形速度曲线，受最大线速度、加速度和制动减速度约束；路径转折处停车后原地转向，受最大角速度约束。位置仍经 PathFinder `try_step` 限制在 NavMesh 上。该模型适用于差速/全向底盘的简化仿真，不适用于汽车式最小转弯半径约束。`navigation_poses.json` 只包含相机信息：`coordinate_frame` 描述 Y-up 坐标和单位，`route.start` / `route.goal` 保存相机起终点位置及 `path_length`（米），`camera` 保存 D435 RGB 参数，`frames` 保存帧序号、模拟时间、相机位置和 `xyzw` 四元数。四元数顺序为 x、y、z、w。代理位置和运动学参数只用于内部导航及可行性校验，不写入位姿 JSON。
+默认还开启连通岛采集密度后处理：将成功吸附到各 NavMesh 岛的 `cameras.json` 轨迹点计数，只有同时满足 `camera_trajectory_density_min_points` 和 `camera_trajectory_density_min_points_per_100m2` 的岛才参与路线起终点选择。该开关及两个阈值位于 `navigation` 配置；每次运行会输出 `camera_trajectory_density_comparison.png` 三列对比图：关闭/开启过滤的 NavMesh 视图分别显示导航轨迹与起终点，第三列单独显示采集轨迹；同一视频帧的多方向相机位置会先合并，轨迹按视频片段分别连接。浅红色标记会被过滤的稀疏区域。图中使用彩色 mesh 纹理底图，并在 `validation.json` 记录逐岛面积、点数、密度和保留状态。该后处理不重写 NavMesh 文件。
+
+运动学使用 `motion.model: differential_drive`：每段直线采用固定帧率三角/梯形速度曲线，受最大线速度、加速度和制动减速度约束；路径转折处停车后原地转向，受最大角速度约束。位置仍经 PathFinder `try_step` 限制在 NavMesh 上。该模型适用于差速/全向底盘的简化仿真，不适用于汽车式最小转弯半径约束。`navigation_poses.json` 只包含相机信息：`coordinate_frame` 描述 Y-up 坐标和单位，`route.start` / `route.goal` 各保存相机 `position` 和 `xyzw`，`path_length` 记录路径长度（米）；`camera` 保存 D435 RGB 参数，`frames` 保存帧序号、模拟时间、相机 `position` 和 `xyzw` 四元数。四元数顺序为 x、y、z、w。代理位置和运动学参数只用于内部导航及可行性校验，不写入位姿 JSON。
 
 输入文件位于 `Wanda Plaza/`（链接到 `/data/data/Wanda Plaza`）。原文件不修改。
 
@@ -40,7 +69,7 @@ python deployment/prepare_scene.py --crop -50 10 -40 20 --out deployment/scene_c
 
 `scene/wanda.navmesh` 是完整场景 NavMesh。`results_full/route_*/validation.json` 为逐路线报告；`trajectory_topdown.png` 展示 NavMesh、轨迹和起终点；`mesh_navmesh_topdown.png` 是彩色 mesh 聚合底图与 NavMesh 叠图；`mesh_topdown_base.png` 和 `mesh_topdown_coordinates.json` 提供纯底图及坐标映射；`mesh_navmesh_detail_*.png` 是 YAML 指定区域的放大图。将 `output.gaussian_navmesh_overlay` 打开后才额外生成 `gaussian_topdown_raw.png` 和 `gaussian_navmesh_topdown.png`，因为高分辨率俯视 Gaussian 会增加显存和渲染时间。`path.npy` 为 geodesic 转折点，`trajectory.npy` 为内部逐帧代理轨迹；`navigation_poses.json` 只记录逐帧相机位姿，不含代理位置；`navigation_rgb.mp4` 和 `rgb_*.png` 来自 CUDA Gaussian Splatting。
 
-相机使用 D435 **RGB** 标称 HFOV=69°、640×360、安装高度1.5米，理想针孔，无畸变。不是深度相机的87°视场角，也不是实机逐台标定内参。默认坐标/mesh单位假定米。代理半径0.25米，高1.5米，爬升0.2米、坡度35°；NavMesh体素0.1×0.05米。路径导航是确定性geodesic跟随与NavMesh碰撞约束，不包含视觉策略、SLAM或运动控制器。
+相机使用 D435 **RGB** 标称 HFOV=69°、1280×720、安装高度1.5米，理想针孔，无畸变。不是深度相机的87°视场角，也不是实机逐台标定内参。默认坐标/mesh单位假定米。NavMesh 栅格为 0.05×0.05 米，代理总宽度 0.75 米，额外障碍净距 0.15 米，因此烘焙半径为 `0.75/2+0.15=0.525 m`；代理高度1.5米、爬升0.2米、坡度35°。这会主动收缩窄路，使路线中心离墙面、低矮柱体等障碍更远。路径导航是确定性 geodesic 跟随与 NavMesh 碰撞约束，不包含视觉策略、SLAM 或运动控制器。
 
 ## 构建
 

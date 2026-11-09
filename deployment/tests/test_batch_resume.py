@@ -3,10 +3,25 @@ import unittest
 import tempfile
 from pathlib import Path
 
-from wanda_nav.cli import is_route_complete, required_route_outputs
+from wanda_nav.cli import effective_config_text, is_route_complete, required_route_outputs
 
 
 class BatchResumeTest(unittest.TestCase):
+    def test_effective_config_preserves_chinese_comments_and_route_seed(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text(
+                "# 全局说明\nscene:\n  directory: scene\n\n"
+                "navigation:\n  # 固定随机种子，用于复现路线\n  seed: 17\n"
+                "  min_route_length_m: 15\n",
+                encoding="utf-8")
+            output = effective_config_text(path, {"navigation": {"seed": 42}})
+        self.assertIn("# 固定随机种子，用于复现路线", output)
+        self.assertIn("  seed: 42", output)
+        self.assertIn("  min_route_length_m: 15", output)
+
     def test_old_pose_schema_is_not_considered_complete(self):
         import json
         with tempfile.TemporaryDirectory() as directory:
@@ -46,6 +61,14 @@ class BatchResumeTest(unittest.TestCase):
                                         "gaussian_navmesh_overlay": True})
         self.assertEqual(files, ["validation.json", "gaussian_topdown_raw.png",
                                  "gaussian_navmesh_topdown.png"])
+
+    def test_density_comparison_not_required_without_camera_prior(self):
+        files = required_route_outputs(
+            {"video": False, "poses_json": False, "trajectory_topdown": False,
+             "mesh_navmesh_overlay": False, "gaussian_navmesh_overlay": False,
+             "camera_trajectory_density_comparison": True},
+            {"use_camera_trajectory_prior": False})
+        self.assertNotIn("camera_trajectory_density_comparison.png", files)
 
     def test_video_disabled_can_resume_without_rgb_frame_count(self):
         import tempfile

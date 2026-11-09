@@ -14,6 +14,17 @@ ROOT = Path(__file__).resolve().parents[2]
 _SNAPPED_CANDIDATE_CACHE = {}
 
 
+def navmesh_agent_radius(nav_config):
+    """计算 NavMesh 烘焙用的代理半径，并叠加额外障碍物净距。"""
+    width = float(nav_config["agent_width_m"])
+    clearance = float(nav_config.get("obstacle_clearance_m", 0.0))
+    if not np.isfinite(width) or width <= 0:
+        raise ValueError("navmesh.agent_width_m 必须是有限正数")
+    if not np.isfinite(clearance) or clearance < 0:
+        raise ValueError("navmesh.obstacle_clearance_m 必须是有限非负数")
+    return width / 2.0 + clearance
+
+
 def resolve_path(value):
     """将配置中的相对路径解释为项目根目录下的路径。"""
     path = Path(value)
@@ -87,10 +98,30 @@ def _load_camera_trajectory_file(path_string, file_size, file_mtime_ns):
     if source.ndim != 2 or source.shape[1] != 3 or not np.isfinite(source).all():
         raise ValueError(f"cameras.json position 必须是有限的 N×3 数组: {path}")
     # prepare_scene.py 使用同一旋转：(x, y, z) -> (x, z, -y)。
-    habitat = source[:, [0, 2, 1]].copy()
-    habitat[:, 2] *= -1.0
-    habitat = np.unique(np.round(habitat, decimals=3), axis=0)
-    return {"positions": habitat, "tree": cKDTree(habitat[:, [0, 2]]),
+    # 保留原始顺序供采集轨迹可视化使用；KD-tree 使用去重位置以减少查询开销。
+    ordered_habitat = source[:, [0, 2, 1]].copy()
+    ordered_habitat[:, 2] *= -1.0
+    habitat = np.unique(np.round(ordered_habitat, decimals=3), axis=0)
+    # 一个视频帧由多个方向相机组成；按 img_name 的“视频段_帧号_相机号”
+    # 分组并合并相机中心，避免把不同朝向的同帧记录或不同视频段硬连成线。
+    capture_groups = {}
+    for camera, position in zip(cameras, ordered_habitat):
+        name = str(camera.get("img_name", ""))
+        parts = name.rsplit("_", 2)
+        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+            sequence, frame_index = parts[0], int(parts[1])
+            capture_groups.setdefault(sequence, {}).setdefault(frame_index, []).append(position)
+    capture_segments = []
+    for sequence in capture_groups.values():
+        frames = [np.mean(positions, axis=0) for _, positions in sorted(sequence.items())]
+        segment = np.asarray(frames, dtype=np.float64)
+        if len(segment):
+            capture_segments.append(segment)
+    if not capture_segments:
+        capture_segments = [ordered_habitat]
+    return {"positions": habitat, "ordered_positions": ordered_habitat,
+            "capture_segments": capture_segments,
+            "tree": cKDTree(habitat[:, [0, 2]]),
             "source_file": str(path.resolve()), "source_count": len(cameras),
             "unique_count": len(habitat)}
 
@@ -141,6 +172,48 @@ def _snapped_camera_candidates(pathfinder, camera_prior, navmesh_path, snap_limi
     return points.copy(), islands.copy()
 
 
+def classify_camera_trajectory_islands(island_areas, candidate_islands,
+                                       min_points=20,
+                                       min_points_per_100m2=0.5):
+    """根据采集轨迹覆盖量判断哪些连通岛可以参与导航。
+
+    `candidate_islands` 来自已经吸附到 NavMesh 的相机位置，因此不会把
+    NavMesh 外的道路点误计入统计。面积密度用“每 100 平方米的轨迹点数”
+    表示，同时要求绝对点数达到阈值，避免一个很小的偶然岛屿被保留。
+    返回布尔保留掩码、各岛点数和密度，供路线选择与可视化共用。
+    """
+    areas = np.asarray(island_areas, dtype=np.float64)
+    islands = np.asarray(candidate_islands, dtype=np.int64)
+    counts = np.bincount(islands[islands >= 0], minlength=len(areas)).astype(np.int64)
+    density = np.divide(counts * 100.0, areas, out=np.zeros_like(areas), where=areas > 1e-9)
+    keep = (counts >= int(min_points)) & (density >= float(min_points_per_100m2))
+    return keep, counts, density
+
+
+def camera_trajectory_island_stats(pathfinder, camera_prior, navmesh_path, config):
+    """计算相机轨迹对每个 NavMesh 岛的覆盖统计，并给出过滤结果。"""
+    nav = config["navigation"]
+    areas = np.asarray([pathfinder.island_area(i) for i in range(pathfinder.num_islands)],
+                       dtype=np.float64)
+    points, islands = _snapped_camera_candidates(
+        pathfinder, camera_prior, navmesh_path,
+        max(float(nav.get("camera_trajectory_buffer_m", 0.0)), 1.0))
+    keep, counts, density = classify_camera_trajectory_islands(
+        areas, islands,
+        nav.get("camera_trajectory_density_min_points", 20),
+        nav.get("camera_trajectory_density_min_points_per_100m2", 0.5))
+    return {
+        "areas_m2": areas,
+        "counts": counts,
+        "density_per_100m2": density,
+        "keep": keep,
+        "candidate_points": points,
+        "candidate_islands": islands,
+        "min_points": int(nav.get("camera_trajectory_density_min_points", 20)),
+        "min_points_per_100m2": float(nav.get("camera_trajectory_density_min_points_per_100m2", 0.5)),
+    }
+
+
 def choose_route(pathfinder, config, navmesh_path=None):
     """按岛面积和三角面采样起终点，再以真实测地距离筛选路线。"""
     nav = config["navigation"]
@@ -155,11 +228,23 @@ def choose_route(pathfinder, config, navmesh_path=None):
                    if island_areas[i] >= nav["min_island_area_m2"]]
     if not islands:
         raise RuntimeError("没有达到 min_island_area_m2 的可行走连通岛")
+    density_stats = None
+    if (camera_prior is not None
+            and nav.get("use_camera_trajectory_density_filter", True)):
+        density_stats = camera_trajectory_island_stats(pathfinder, camera_prior, navmesh_path, config)
+        islands = [island for island in islands if bool(density_stats["keep"][island])]
+        if not islands:
+            raise RuntimeError(
+                "采集轨迹密度过滤后没有可行走连通岛；请降低 "
+                "camera_trajectory_density_min_points 或 "
+                "camera_trajectory_density_min_points_per_100m2，或关闭过滤")
     if nav["start"] is not None:
         start = pathfinder.snap_point(np.asarray(nav["start"], dtype=np.float32))
         goal = pathfinder.snap_point(np.asarray(nav["goal"], dtype=np.float32))
         if pathfinder.get_island(start) != pathfinder.get_island(goal):
             raise RuntimeError("配置的起点和终点不属于同一个 NavMesh 连通岛")
+        if density_stats is not None and not bool(density_stats["keep"][pathfinder.get_island(start)]):
+            raise RuntimeError("配置的起点/终点位于采集轨迹稀疏而被过滤的连通岛")
         candidates = [(start, goal)]
     else:
         rng = np.random.default_rng(nav["seed"])
@@ -216,6 +301,16 @@ def choose_route(pathfinder, config, navmesh_path=None):
                 and nav["min_route_length_m"] < path.geodesic_distance < nav["max_route_length_m"]
                 and route_within_camera_buffer(
                     path.points, camera_prior, nav.get("camera_trajectory_buffer_m", 0.0))):
+            # 路径几何可达不代表按当前 fps 和 try_step 投影后仍能通过每个转折点。
+            # 在接受候选前使用实际运动学模拟筛掉这种路线，批量生成时继续采样。
+            try:
+                build_motion(pathfinder, path.points, config)
+            except RuntimeError as error:
+                if "NavMesh 投影导致轨迹无法到达路径转折点" not in str(error):
+                    raise
+                if nav["start"] is not None:
+                    raise RuntimeError("配置路线无法通过 NavMesh 逐帧运动学验证") from error
+                continue
             return path, int(pathfinder.get_island(path.requested_start))
         if nav["start"] is not None:
             raise RuntimeError("配置的起终点无法构成满足距离及采集轨迹缓冲区条件的 NavMesh 路径")

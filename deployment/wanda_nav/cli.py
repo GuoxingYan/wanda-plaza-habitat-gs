@@ -3,6 +3,7 @@ import argparse
 import copy
 import json
 from pathlib import Path
+import re
 import traceback
 import yaml
 from .planning import load_config
@@ -12,7 +13,7 @@ import habitat_sim as hs
 import magnum as mn
 
 
-def required_route_outputs(output_config):
+def required_route_outputs(output_config, navigation_config=None):
     """根据本次启用的输出类型返回续跑时必须存在的文件。"""
     required = ["validation.json"]
     for enabled, filename in (
@@ -25,6 +26,9 @@ def required_route_outputs(output_config):
     ):
         if output_config.get(enabled, False):
             required.append(filename)
+    if (output_config.get("camera_trajectory_density_comparison", False)
+            and (navigation_config or {}).get("use_camera_trajectory_prior", True)):
+        required.append("camera_trajectory_density_comparison.png")
     return required
 
 
@@ -39,16 +43,43 @@ def is_route_complete(route_dir, report, config):
         try:
             import json
             pose_data = json.loads((Path(route_dir) / "navigation_poses.json").read_text(encoding="utf-8"))
-            if (any("agent_position" in endpoint for endpoint in
-                    (pose_data["route"]["start"], pose_data["route"]["goal"]))
-                    or any("agent_position" in frame or "position" in frame
-                           or "camera_position" not in frame
+            endpoints = (pose_data["route"]["start"], pose_data["route"]["goal"])
+            if (any("agent_position" in endpoint or "camera_position" in endpoint
+                    or set(endpoint) != {"position", "xyzw"}
+                    or "position" not in endpoint or "xyzw" not in endpoint
+                    for endpoint in endpoints)
+                    or any("agent_position" in frame or "camera_position" in frame
+                           or "motion" in pose_data
+                           or "position" not in frame or "xyzw" not in frame
                            for frame in pose_data["frames"])):
                 return False
         except (OSError, ValueError, KeyError, TypeError):
             return False
     return all((Path(route_dir) / name).is_file()
-               for name in required_route_outputs(output_config))
+               for name in required_route_outputs(output_config, config.get("navigation")))
+
+
+def effective_config_text(config_path, config):
+    """保留源 YAML 的逐项中文注释，只替换该路线实际使用的随机种子。"""
+    text = Path(config_path).read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    in_navigation = False
+    replaced = False
+    for index, line in enumerate(lines):
+        if line and not line[0].isspace() and not line.lstrip().startswith("#"):
+            in_navigation = line.split(":", 1)[0].strip() == "navigation"
+        if in_navigation and re.match(r"^  seed\s*:", line):
+            prefix, remainder = line.split(":", 1)
+            value, marker, comment = remainder.partition("#")
+            suffix = f"#{comment}" if marker else ""
+            newline = "\n" if line.endswith("\n") else ""
+            spacing = " " if suffix else ""
+            lines[index] = f"{prefix}: {config['navigation']['seed']}{spacing}{suffix}{newline}"
+            replaced = True
+            break
+    if not replaced:
+        raise ValueError(f"配置文件中未找到 navigation.seed: {config_path}")
+    return "".join(lines)
 
 
 def main():
@@ -63,6 +94,7 @@ def main():
     parser.add_argument('--single', action='store_true', help='只运行一条路线（用于完整场景预验证）')
     parser.add_argument('--visualize-only', action='store_true',
                         help='只刷新已有路线的俯视图，不重新生成视频或烘焙 NavMesh')
+    parser.add_argument('--route', help='配合 --visualize-only 时只刷新指定 route_*/ 目录')
     args = parser.parse_args()
     config = load_config(args.config)
     if args.visualize_only:
@@ -102,17 +134,22 @@ def main():
         bounds = np.asarray(scene_pathfinder.get_bounds(), dtype=np.float32)
         xmin, zmin = bounds[0, 0], bounds[0, 2]
         xmax, zmax = bounds[1, 0], bounds[1, 2]
-        top_y = float(bounds[1, 1] + config['visualization']['gaussian_topdown_height_m'])
-        width = int(config['visualization']['image_width_px'])
-        height = int(config['visualization']['image_height_px'])
-        span = max(float(xmax-xmin), float(zmax-zmin) * width / height) * 1.10
-        focal = width * (top_y-float(bounds[1, 1])) / span
+        visual = config['visualization']
+        tile_size = float(visual.get('gaussian_topdown_tile_size_m', 64.0))
+        tile_pixels = int(visual.get('gaussian_topdown_tile_resolution_px', 768))
+        camera_height = float(visual.get('gaussian_topdown_camera_height_m', 8.0))
+        above = float(visual.get('gaussian_topdown_height_above_walkable_m', 3.0))
+        below = float(visual.get('gaussian_topdown_depth_below_walkable_m', 0.5))
         topdown = hs.CameraSensorSpec()
         topdown.uuid = 'topdown_rgb'; topdown.sensor_type = hs.SensorType.COLOR
-        topdown.resolution = [height, width]; topdown.position = [0.0, 0.0, 0.0]
+        # Gaussian 渲染器对针孔路径支持更成熟；使用低高度局部透视 tile，
+        # 避免整场景高空透视的浮点，也避免正交路径的方向性拉丝。
+        topdown.sensor_subtype = hs.SensorSubType.PINHOLE
+        topdown.resolution = [tile_pixels, tile_pixels]; topdown.position = [0.0, 0.0, 0.0]
         topdown.orientation = [-float(np.pi/2), 0.0, 0.0]
-        topdown.hfov = float(np.degrees(2*np.arctan(width/(2*focal))))
-        topdown.near = config['camera']['near_m']; topdown.far = top_y-float(bounds[0,1])+100.0
+        topdown.hfov = float(np.degrees(2 * np.arctan(tile_size / (2 * camera_height))))
+        topdown.near = max(0.01, camera_height - above)
+        topdown.far = camera_height + below
         sensors.append(topdown)
     agent.sensor_specifications = sensors
     pending = []
@@ -126,14 +163,14 @@ def main():
         run_args.output.mkdir(parents=True, exist_ok=True)
         done_file = run_args.output / 'validation.json'
         report = json.loads(done_file.read_text()) if done_file.exists() else {}
-        required = required_route_outputs(current['output'])
+        required = required_route_outputs(current['output'], current.get('navigation'))
         if (not args.force and not (run_args.output / 'failure.json').exists()
                 and is_route_complete(run_args.output, report, current)):
             print(f'[{index + 1}/{count}] skip completed {run_args.output}', flush=True)
             continue
         # 每条结果保存实际生效配置，便于复现实验及查看可视化参数。
         (run_args.output / 'effective_config.yaml').write_text(
-            yaml.safe_dump(current, allow_unicode=True, sort_keys=False), encoding='utf-8')
+            effective_config_text(args.config, current), encoding='utf-8')
         pending.append((index, run_args, current))
     if pending:
         with hs.Simulator(hs.Configuration(sim_config, [agent])) as sim:
@@ -165,7 +202,8 @@ def refresh_visualizations(args, config):
     import magnum as mn
     from PIL import Image
     from .visualization import (topdown_plots, save_gaussian_navmesh_overlay,
-                                project_navmesh_to_topdown_pixels)
+                                project_navmesh_world_to_topdown_pixels,
+                                render_ground_sliced_gaussian_topdown)
 
     scene_dir = args.scene_dir or resolve_path(config['scene']['directory'])
     stage = json.loads((scene_dir / 'wanda.stage_config.json').read_text(encoding='utf-8'))
@@ -187,6 +225,8 @@ def refresh_visualizations(args, config):
         raise RuntimeError(f'没有找到路线输出目录: {args.output}')
 
     for output_dir in output_dirs:
+        if args.route and output_dir.name != args.route:
+            continue
         path_file = output_dir / 'path.npy'
         trajectory_file = output_dir / 'trajectory.npy'
         if not path_file.exists() or not trajectory_file.exists():
@@ -203,20 +243,22 @@ def refresh_visualizations(args, config):
         topdown_plots(pathfinder, path, frames, scene_dir, output_dir, route_config, island)
 
         if route_config['output'].get('gaussian_navmesh_overlay', False):
-            width = int(route_config['visualization']['image_width_px'])
-            height = int(route_config['visualization']['image_height_px'])
-            top_y = float(scene_bounds[1, 1] + route_config['visualization']['gaussian_topdown_height_m'])
-            span = max(float(xmax-xmin), float(zmax-zmin) * width / height) * 1.10
-            focal = width * (top_y-float(scene_bounds[1, 1])) / span
+            visual = route_config['visualization']
+            tile_size = float(visual.get('gaussian_topdown_tile_size_m', 64.0))
+            tile_pixels = int(visual.get('gaussian_topdown_tile_resolution_px', 768))
+            camera_height = float(visual.get('gaussian_topdown_camera_height_m', 8.0))
+            above = float(visual.get('gaussian_topdown_height_above_walkable_m', 3.0))
+            below = float(visual.get('gaussian_topdown_depth_below_walkable_m', 0.5))
             topdown = hs.CameraSensorSpec()
             topdown.uuid = 'topdown_rgb'
             topdown.sensor_type = hs.SensorType.COLOR
-            topdown.resolution = [height, width]
+            topdown.sensor_subtype = hs.SensorSubType.PINHOLE
+            topdown.resolution = [tile_pixels, tile_pixels]
             topdown.position = [0.0, 0.0, 0.0]
             topdown.orientation = [-float(np.pi / 2), 0.0, 0.0]
-            topdown.hfov = float(np.degrees(2 * np.arctan(width / (2 * focal))))
-            topdown.near = route_config['camera']['near_m']
-            topdown.far = top_y-float(scene_bounds[0,1])+100.0
+            topdown.hfov = float(np.degrees(2 * np.arctan(tile_size / (2 * camera_height))))
+            topdown.near = max(0.01, camera_height - above)
+            topdown.far = camera_height + below
             agent = hs.agent.AgentConfiguration()
             agent.sensor_specifications = [topdown]
             sim_cfg = hs.SimulatorConfiguration()
@@ -225,18 +267,13 @@ def refresh_visualizations(args, config):
             sim_cfg.load_semantic_mesh = False
             sim_cfg.gpu_device_id = 0
             with hs.Simulator(hs.Configuration(sim_cfg, [agent])) as sim:
-                state = hs.AgentState()
-                state.position = mn.Vector3(float((xmin+xmax)/2), top_y, float((zmin+zmax)/2))
-                state.rotation = hs.utils.common.quat_from_angle_axis(0.0, np.array([0, 1, 0]))
-                sim.initialize_agent(0, state)
-                rgb = sim.get_sensor_observations()['topdown_rgb'][:, :, :3]
+                rgb, extent = render_ground_sliced_gaussian_topdown(
+                    sim, triangles_by_island, route_config, scene_bounds)
             Image.fromarray(rgb).save(output_dir / 'gaussian_topdown_raw.png')
-            # Habitat 的相机俯视时，相机画面上方对应世界 +Z；图像第 0 行在上。
-            projected = []
-            for idx, tri in triangles_by_island:
-                pixels = project_navmesh_to_topdown_pixels(
-                    tri, top_y, focal, (xmin+xmax)/2, (zmin+zmax)/2, width, height)
-                projected.append((idx, pixels))
+            width = int(visual['image_width_px'])
+            height = int(visual['image_height_px'])
+            projected = [(idx, project_navmesh_world_to_topdown_pixels(tri, extent, width, height))
+                         for idx, tri in triangles_by_island]
             save_gaussian_navmesh_overlay(rgb, projected,
                                           (-0.5, width-0.5, -0.5, height-0.5),
                                           output_dir / 'gaussian_navmesh_topdown.png', route_config)

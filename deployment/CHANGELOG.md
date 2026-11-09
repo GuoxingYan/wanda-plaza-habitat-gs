@@ -1,5 +1,20 @@
 # 功能修改记录
 
+## 2026-11-09：NavMesh 障碍净距与运动学路线预检
+
+- 默认 NavMesh 栅格细化到 0.05 m，代理宽度设为 0.75 m，并新增 0.15 m 障碍净距，烘焙代理半径为 0.525 m。
+- 路线候选现在会先按实际逐帧运动学和 NavMesh `try_step` 投影预检；不能可靠到达转折点的候选会被跳过并重新采样。
+- 重新烘焙全密度场景 NavMesh，并运行 50 条 1280×720 Gaussian 导航数据批次；批次中的失败 seed 将按同一配置重试。
+
+## 2026-11-09：按采集轨迹密度过滤 NavMesh 连通岛
+
+- 新增 `navigation.use_camera_trajectory_density_filter`（默认开启），利用 `cameras.json` 吸附到 NavMesh 的轨迹点统计每个连通岛的覆盖量；只有同时满足最少点数与每 100 m² 点数阈值的岛参与路线采样。
+- 新增 `camera_trajectory_density_min_points` 和 `camera_trajectory_density_min_points_per_100m2` 两个 YAML 参数。处理只约束路线候选，不重写原始 NavMesh。
+- 新增 `camera_trajectory_density_comparison.png`，对比图增加独立的采集轨迹第三列；稀疏区域以浅红色表示，密度充分区域以绿色表示。
+- 前两列叠加彩色 mesh 纹理底图、实际逐帧导航轨迹、起点和终点；三列复用相同米制坐标映射。`validation.json` 保存逐岛面积、点数、密度和保留状态。
+- 采集轨迹视图按 `img_name` 中的视频片段与帧号分组，同帧多方向相机合并为一个位置，避免跨片段连线。
+- 轨迹吸附结果复用已有输入指纹缓存；关闭 cameras 先验时，对比图不再成为续跑必需文件。
+
 ## 2026-11-06：高清可视化与坐标翻转修复
 
 - 将俯视导出升级到可配置的 3600×3000 像素；保留 DPI、覆盖透明度、颜色与轨迹线宽控制。

@@ -10,10 +10,14 @@ import magnum as mn
 import numpy as np
 from PIL import Image
 
-from .planning import (build_motion, choose_route, load_camera_trajectory,
+from .planning import (build_motion, camera_trajectory_island_stats, choose_route, load_camera_trajectory,
+                       navmesh_agent_radius,
                        quaternion_xyzw, resolve_path, route_within_camera_buffer,
                        yaw_quaternion)
-from .visualization import topdown_plots, save_gaussian_navmesh_overlay, project_navmesh_to_topdown_pixels
+from .visualization import (topdown_plots, save_gaussian_navmesh_overlay,
+                            save_camera_density_comparison,
+                            project_navmesh_world_to_topdown_pixels,
+                            render_ground_sliced_gaussian_topdown)
 
 
 def run_one(args, config, render_sim=None):
@@ -30,7 +34,8 @@ def run_one(args, config, render_sim=None):
     settings = hs.NavMeshSettings(); settings.set_defaults()
     nav = config["navmesh"]
     settings.cell_size, settings.cell_height = nav["cell_size_m"], nav["cell_height_m"]
-    settings.agent_height, settings.agent_radius = nav["agent_height_m"], nav["agent_width_m"] / 2
+    effective_agent_radius = navmesh_agent_radius(nav)
+    settings.agent_height, settings.agent_radius = nav["agent_height_m"], effective_agent_radius
     settings.agent_max_climb, settings.agent_max_slope = nav["max_climb_m"], nav["max_slope_deg"]
     if nav["edge_max_error_m"] > 0:
         settings.edge_max_error = nav["edge_max_error_m"]
@@ -50,10 +55,45 @@ def run_one(args, config, render_sim=None):
     largest_island = int(np.argmax([pathfinder.island_area(i) for i in range(pathfinder.num_islands)]))
     path, island = choose_route(pathfinder, config, navmesh_path=navmesh_path)
     points = np.asarray(path.points, dtype=np.float32)
+    frames = build_motion(pathfinder, points, config)
     camera_prior = load_camera_trajectory(config)
+    density_report = None
+    if camera_prior is not None:
+        stats = camera_trajectory_island_stats(pathfinder, camera_prior, navmesh_path, config)
+        filter_enabled = bool(config["navigation"].get("use_camera_trajectory_density_filter", True))
+        density_report = {
+            "enabled": filter_enabled,
+            "source_file": camera_prior["source_file"],
+            "candidate_count": int(len(stats["candidate_islands"])),
+            "min_points": stats["min_points"],
+            "min_points_per_100m2": stats["min_points_per_100m2"],
+            "islands": [{"island": int(i), "area_m2": float(stats["areas_m2"][i]),
+                         "camera_trajectory_points": int(stats["counts"][i]),
+                         "points_per_100m2": float(stats["density_per_100m2"][i]),
+                         "retained": bool(stats["keep"][i])}
+                        for i in range(len(stats["areas_m2"]))],
+        }
+        stats["bounds"] = (float(np.asarray(pathfinder.get_bounds())[0, 0]),
+                           float(np.asarray(pathfinder.get_bounds())[1, 0]),
+                           float(np.asarray(pathfinder.get_bounds())[0, 2]),
+                           float(np.asarray(pathfinder.get_bounds())[1, 2]))
+        triangles = [(island_id, np.asarray(pathfinder.build_navmesh_vertices(island_id))
+                      .reshape(-1, 3, 3)) for island_id in range(pathfinder.num_islands)]
+        triangles = [(island_id, tri) for island_id, tri in triangles if len(tri)]
+        if config["output"].get("camera_trajectory_density_comparison", True):
+            mesh_path = Path(stage_config["collision_asset"])
+            if not mesh_path.is_absolute():
+                mesh_path = scene_dir / mesh_path
+            save_camera_density_comparison(
+                triangles, stats, np.asarray([frame[0] for frame in frames]),
+                camera_prior["capture_segments"], mesh_path, scene_dir,
+                output_dir / "camera_trajectory_density_comparison.png", config)
+    elif camera_prior is None:
+        density_report = {"enabled": False, "reason": "camera trajectory prior disabled or unavailable"}
+    else:
+        density_report = {"enabled": False, "reason": "density filter disabled by configuration"}
     camera_buffer_ok = route_within_camera_buffer(
         points, camera_prior, config["navigation"].get("camera_trajectory_buffer_m", 0.0))
-    frames = build_motion(pathfinder, points, config)
     if not route_within_camera_buffer(
             np.asarray([frame[0] for frame in frames]), camera_prior,
             config["navigation"].get("camera_trajectory_buffer_m", 0.0)):
@@ -66,10 +106,13 @@ def run_one(args, config, render_sim=None):
                   all_island_areas_m2=[float(pathfinder.island_area(i)) for i in range(pathfinder.num_islands)],
                   bounds=[np.asarray(x).tolist() for x in pathfinder.get_bounds()],
                   navmesh_settings={"cell_size_m": nav["cell_size_m"], "cell_height_m": nav["cell_height_m"],
-                                    "agent_width_m": nav["agent_width_m"], "agent_radius_m": nav["agent_width_m"] / 2,
+                                    "agent_width_m": nav["agent_width_m"],
+                                    "agent_radius_m": effective_agent_radius,
+                                    "obstacle_clearance_m": nav.get("obstacle_clearance_m", 0.0),
                                     "agent_height_m": nav["agent_height_m"], "max_climb_m": nav["max_climb_m"],
                                     "max_slope_deg": nav["max_slope_deg"], "edge_max_error_m": nav["edge_max_error_m"]},
-                  agent_width_m=nav["agent_width_m"], agent_radius_m=nav["agent_width_m"] / 2,
+                  agent_width_m=nav["agent_width_m"], agent_radius_m=effective_agent_radius,
+                  obstacle_clearance_m=nav.get("obstacle_clearance_m", 0.0),
                   agent_height_m=nav["agent_height_m"], geodesic_distance_m=float(path.geodesic_distance),
                   navigation_steps=len(frames) - 1, goal_error_m=float(np.linalg.norm(frames[-1][0] - points[-1])),
                   all_steps_navigable=all(pathfinder.is_navigable(frame[0].astype(np.float32), 0.15) for frame in frames))
@@ -89,67 +132,33 @@ def run_one(args, config, render_sim=None):
                              and config["navigation"].get("start") is None
                              else "configured_or_navmesh_sample"),
     }
+    report["camera_trajectory_density_filter"] = density_report
     topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, island)
 
     if config["output"].get("gaussian_navmesh_overlay", False) and not args.bake_only:
         import matplotlib
         matplotlib.use("Agg")
-        height = int(config["visualization"]["image_height_px"])
-        width = int(config["visualization"]["image_width_px"])
         world_bounds = np.asarray(pathfinder.get_bounds(), dtype=np.float64)
-        xmin, xmax = world_bounds[:, 0]
-        zmin, zmax = world_bounds[:, 2]
-        camera_y = float(world_bounds[1, 1] + config["visualization"]["gaussian_topdown_height_m"])
-        span = max(float(xmax - xmin), float(zmax - zmin) * width / height) * 1.10
-        focal = width * (camera_y - float(world_bounds[1, 1])) / span
-
-        topdown_sensor = hs.CameraSensorSpec()
-        topdown_sensor.uuid = "topdown_rgb"
-        topdown_sensor.sensor_type = hs.SensorType.COLOR
-        topdown_sensor.resolution = [height, width]
-        topdown_sensor.position = mn.Vector3(0, 0, 0)
-        topdown_sensor.orientation = mn.Vector3(-math.pi / 2, 0, 0)
-        topdown_sensor.hfov = math.degrees(2 * math.atan(width / (2 * focal)))
-        topdown_sensor.near = config["camera"]["near_m"]
-        topdown_sensor.far = camera_y - float(world_bounds[0, 1]) + 100.0
-        if render_sim is None:
-            topdown_agent = hs.agent.AgentConfiguration()
-            topdown_agent.sensor_specifications = [topdown_sensor]
-            topdown_sim_cfg = hs.SimulatorConfiguration()
-            topdown_sim_cfg.scene_id = str((scene_dir / "wanda.stage_config.json").resolve())
-            topdown_sim_cfg.enable_physics = False
-            topdown_sim_cfg.load_semantic_mesh = False
-            topdown_sim_cfg.gpu_device_id = 0
-            with hs.Simulator(hs.Configuration(topdown_sim_cfg, [topdown_agent])) as topdown_sim:
-                topdown_state = hs.AgentState()
-                topdown_state.position = mn.Vector3(float((xmin + xmax) / 2), camera_y,
-                                                    float((zmin + zmax) / 2))
-                topdown_state.rotation = yaw_quaternion(0.0)
-                topdown_sim.initialize_agent(0, topdown_state)
-                topdown_rgb = topdown_sim.get_sensor_observations()["topdown_rgb"][:, :, :3]
-        else:
-            # 批量入口已在 Simulator 创建前注册俯视 sensor，和行走相机共用 Gaussian 场景。
-            topdown_state = hs.AgentState()
-            topdown_state.position = mn.Vector3(float((xmin + xmax) / 2), camera_y,
-                                                float((zmin + zmax) / 2))
-            topdown_state.rotation = yaw_quaternion(0.0)
-            render_sim.initialize_agent(0, topdown_state)
-            topdown_rgb = render_sim.get_sensor_observations()["topdown_rgb"][:, :, :3]
-            restore_state = hs.AgentState()
-            restore_state.position = mn.Vector3(*frames[-1][0].tolist())
-            restore_state.rotation = yaw_quaternion(frames[-1][1])
-            render_sim.initialize_agent(0, restore_state)
-        Image.fromarray(topdown_rgb).save(output_dir / "gaussian_topdown_raw.png")
-        projected_islands = []
+        islands = []
         for island_id in range(pathfinder.num_islands):
             triangles = np.asarray(pathfinder.build_navmesh_vertices(island_id)).reshape(-1, 3, 3)
             if len(triangles):
-                pixels = project_navmesh_to_topdown_pixels(
-                    triangles, camera_y, focal, (xmin + xmax) / 2, (zmin + zmax) / 2,
-                    width, height)
-                projected_islands.append((island_id, pixels))
+                islands.append((island_id, triangles))
+        if render_sim is None:
+            raise RuntimeError("Gaussian 正交分块俯视需要复用已注册 topdown_rgb 的 Simulator")
+        topdown_rgb, topdown_extent = render_ground_sliced_gaussian_topdown(
+            render_sim, islands, config, world_bounds)
+        restore_state = hs.AgentState()
+        restore_state.position = mn.Vector3(*frames[-1][0].tolist())
+        restore_state.rotation = yaw_quaternion(frames[-1][1])
+        render_sim.initialize_agent(0, restore_state)
+        Image.fromarray(topdown_rgb).save(output_dir / "gaussian_topdown_raw.png")
+        width = int(config["visualization"]["image_width_px"])
+        height = int(config["visualization"]["image_height_px"])
+        projected = [(idx, project_navmesh_world_to_topdown_pixels(tri, topdown_extent, width, height))
+                     for idx, tri in islands]
         save_gaussian_navmesh_overlay(
-            topdown_rgb, projected_islands, (-0.5, width - 0.5, -0.5, height - 0.5),
+            topdown_rgb, projected, (-0.5, width - 0.5, -0.5, height - 0.5),
             output_dir / "gaussian_navmesh_topdown.png", config)
 
     if not args.bake_only:
@@ -188,7 +197,7 @@ def run_one(args, config, render_sim=None):
                         Image.fromarray(rgb).save(output_dir / f"rgb_{index:04d}.png")
                     camera_position = position + np.array([0, config["motion"]["camera_height_m"], 0])
                     frame_records.append({"frame_index": index, "timestamp_s": float(timestamp),
-                                          "camera_position": [float(x) for x in camera_position],
+                                          "position": [float(x) for x in camera_position],
                                           "xyzw": quaternion_xyzw(state.rotation)})
                     if index % 100 == 0:
                         print(f"Rendered {index}/{len(frames)} frames", flush=True)
@@ -218,8 +227,10 @@ def run_one(args, config, render_sim=None):
                 "route": {
                     "route_id": output_dir.name,
                     "seed": int(config["navigation"]["seed"]),
-                    "start": {"camera_position": frame_records[0]["camera_position"]},
-                    "goal": {"camera_position": frame_records[-1]["camera_position"]},
+                    "start": {"position": frame_records[0]["position"],
+                              "xyzw": frame_records[0]["xyzw"]},
+                    "goal": {"position": frame_records[-1]["position"],
+                             "xyzw": frame_records[-1]["xyzw"]},
                     "path_length": float(path.geodesic_distance),
                 },
                 "camera": {
