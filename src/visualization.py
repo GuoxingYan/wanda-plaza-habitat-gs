@@ -431,7 +431,7 @@ def project_navmesh_world_to_topdown_pixels(triangles, extent, width, height):
     return np.stack([pixel_x, pixel_y], axis=-1)
 
 
-def topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, island):
+def topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, island, obstacle=None):
     """輸出軌跡、彩色 mesh/NavMesh 及 Gaussian/NavMesh 高分辨率頂視圖。"""
     import matplotlib
     matplotlib.use("Agg")
@@ -460,6 +460,12 @@ def topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, isl
                 linewidth=visual["trajectory_linewidth"], label="運行軌跡", zorder=4)
         ax.scatter(*trajectory[0, [0, 2]], color="#1674d1", s=70, label="起點", zorder=5)
         ax.scatter(*trajectory[-1, [0, 2]], color="#e33c32", s=70, label="終點", zorder=5)
+        if obstacle and obstacle.get("triggered"):
+            from matplotlib.patches import Circle
+            center = obstacle["center"]
+            ax.add_patch(Circle((center[0], center[2]), obstacle["radius_m"],
+                                facecolor="#e53935", edgecolor="#8b1111", alpha=0.8,
+                                label="臨時障礙物", zorder=6))
         _finish_axis(ax, nav_bounds)
         ax.legend(loc="upper right", framealpha=0.95)
         ax.set_title("NavMesh 全連通區與導航軌跡")

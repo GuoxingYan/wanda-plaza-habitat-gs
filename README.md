@@ -1,37 +1,51 @@
-# Wanda Plaza Habitat-GS 导航验证
+# Wanda Plaza Habitat-GS 导航
 
-这个仓库保存 Wanda Plaza 场景接入 Habitat-GS 的可复现脚本和配置。原始场景数据不在仓库中，需要在本地准备：
+室外场景导航数据生成与验证工具：从带颜色的 mesh 生成 NavMesh，结合 `cameras.json` 采集轨迹先验规划路线，按运动学约束生成 D435 视角的 Gaussian RGB 视频、位姿 JSON 和诊断图。
 
-```text
-/data/projects/CloudRobo/Wanda Plaza/point_cloud.ply
-/data/projects/CloudRobo/Wanda Plaza/mesh.ply
-```
+## 快速开始
 
-其中 Gaussian PLY 与 mesh 使用同一个源坐标系。脚本默认裁剪源坐标 `X=[-50,10]、Y=[-40,20]` 的 60×60 米区域；mesh 只保留三个顶点都在范围内的三角面，高斯中心使用完全相同的范围。随后将源 Z-up 坐标转换到 Habitat Y-up：`(x,y,z) -> (x,z,-y)`，同时旋转法线、四元数和球谐颜色系数。
-
-## 安装环境
-
-机器上已经验证的环境名称为 `cloudrobo-habitat-gs`，Python 3.12，Habitat-GS 0.3.3，CUDA 12.4，GPU 为 RTX 3090。源码构建使用 `deployment/build.sh`；首次编译会花较长时间。
-
-## 运行验证
+项目依赖 `data/Wanda Plaza/` 原始输入链接（当前指向 `/data/data/Wanda Plaza`）和已构建的 Habitat-GS 环境 `cloudrobo-habitat-gs`。本地生成场景与原始数据链接保存在被 Git 忽略的 `data/`，运行结果和报告保存在 `outputs/`。
 
 ```bash
 cd /data/projects/CloudRobo
 conda activate cloudrobo-habitat-gs
-python deployment/prepare_scene.py
-./deployment/run_validation.sh
+
+# 由原始 mesh 与 Gaussian PLY 准备场景
+python scripts/prepare_scene.py --out data/scene_crop
+
+# 使用默认配置生成一条路线并验证
+bash scripts/run_validation.sh --config configs/default.yaml --single
+
+# 全密度 50 条批量生成与 HTML 汇总（需先准备 data/scene_fullres）
+bash scripts/run_fullres_50.sh
+
+# 运行测试
+PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
-验证会完成：mesh NavMesh 烘焙、最大连通区域内的 geodesic 路径规划、`PathFinder.try_step` 移动检查，以及 D435 RGB 参数下的 CUDA Gaussian Splatting 渲染。验证报告写入 `deployment/results_crop/validation.json`；生成的二进制场景和媒体文件被 `.gitignore` 排除。
+## 目录
 
-当前 crop 的实测结果保留在 `deployment/results_crop/validation.json`：NavMesh 可导航面积 771.76 m²，路径长度 30.46 m，119 个移动步，终点误差 0，RGB 120 帧、640×360、约 6.4 ms/帧。
+```text
+configs/       运行配置，所有参数带中文说明
+src/           Python 实现模块（CLI、规划、运动、渲染、可视化、避障）
+scripts/       场景准备、运行、构建和结果汇总入口
+tests/         单元与回归测试
+docs/          完整使用说明、可视化说明、位姿规范和变更记录
+third_party/   Habitat-GS 构建补丁及资源配置
+data/          本地生成的场景、缓存、日志和诊断批次（忽略）
+outputs/       默认运行结果（忽略）
+```
 
-## 文件说明
+旧 `deployment/` 下的本地生成资产不会随代码自动移动；盘点后可执行 `bash scripts/migrate_local_data.sh` 进行原位迁移。原始数据链接位于 `data/Wanda Plaza`。
 
-- `deployment/prepare_scene.py`：读取二进制 PLY，按同一包围盒裁剪 mesh 与高斯并完成坐标/SH 变换。
-- `deployment/validate_navigation.py`：烘焙 NavMesh、规划路线、检查移动并渲染 RGB。
-- `deployment/run_validation.sh`：设置 CUDA 与动态库路径后运行验证。
-- `deployment/build.sh`：在独立 Conda 环境中构建 CUDA Habitat-GS。
-- `deployment/habitat-gs-minimal-build.patch`：关闭 Assimp 时修正 Magnum 静态插件列表的补丁。
+Python 源码按你的目录要求直接放在 `src/`，没有额外的 `src/wanda_nav/` 层级。各功能模块通过 `src` 包名导入。
 
-该 mesh PLY 实际包含顶点颜色，没有 UV 或外部纹理文件；因此渲染验证使用 Gaussian 的 SH 颜色。D435 使用 RGB 彩色相机标称水平视场角 69°，不是深度相机视场角，也不是某台实机逐台标定的内参。
+## 输入与坐标
+
+原始数据不进入 Git。`scripts/prepare_scene.py` 对 mesh 和 Gaussian PLY 使用相同裁剪范围，并将源 Z-up 坐标 `(x,y,z)` 转为 Habitat Y-up `(x,z,-y)`。更多参数、验证产物、运动模型及已知限制见 [完整使用说明](docs/deployment.md)。图像颜色、叠加图和坐标轴含义见 [可视化说明](docs/visualization.md)。
+
+当前本地全密度 50 条结果汇总（如果已生成）：[HTML 汇总](outputs/results_fullres/batch_20261109_50/summary.html)。该路径属于本地输出，不会随仓库发布。
+
+## 版本
+
+NavMesh 首个完整打通版本：`v0.5.0-navmesh-complete`。功能变更见 [CHANGELOG](docs/changelog.md)。

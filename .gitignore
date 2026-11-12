@@ -1,21 +1,18 @@
-# 原始场景与生成资产：体积很大，不能提交到代码仓库
-Wanda Plaza
-habitat-gs
+# 原始输入、场景资产、缓存、运行输出与第三方源码不提交
+data/
+outputs/
+third_party/habitat-gs/
+habitat-gs/
+
+# 兼容旧版本地目录，避免残留大文件进入版本控制
 deployment/scene/
 deployment/scene_crop/
-deployment/results_crop/*.mp4
-deployment/results_crop/*.npy
-deployment/results_crop/*.png
-deployment/results_crop/*.json
-
-# 编译、下载缓存和运行日志
-habitat-gs/build/
-habitat-gs/src/deps/*
-!habitat-gs/src/deps/.gitkeep
+deployment/scene_fullres/
+deployment/scene_topdown_crop/
+deployment/results_*/
 deployment/logs/
-deployment/*.tar.gz
 deployment/system-deps/
-deployment/__pycache__/
+deployment/*.tar.gz
 
 # Python 与编辑器文件
 __pycache__/
@@ -30,19 +27,10 @@ deployment/results_crop/route_*/
 
 deployment/results_full/
 deployment/results_full_preview/
-
-# 全密度场景与本地诊断输出，不上传数据
-deployment/scene_fullres/
-deployment/results_fullres/
-
-# 本地 50 条全场景新配置验证结果，包含视频和大型可视化 HTML
 deployment/results_full_v020/
 deployment/pose_schema_smoke/
-deployment/scene/.wanda_navmesh_visual_cache.npz
-deployment/scene_crop/.wanda_navmesh_visual_cache.npz
-deployment/scene_fullres/.wanda_navmesh_visual_cache.npz
-deployment/scene/**/.mesh_topdown_*.npz
-deployment/scene_crop/**/.mesh_topdown_*.npz
-deployment/scene_fullres/**/.mesh_topdown_*.npz
-deployment/scene_topdown_crop/
 deployment/results_density_smoke/
+
+# Python 缓存
+__pycache__/
+*.py[cod]

@@ -6,9 +6,8 @@ from pathlib import Path
 import re
 import traceback
 import yaml
-from .planning import load_config
-from .pipeline import run_one
-from .planning import resolve_path
+from src.planning import load_config, resolve_path
+from src.pipeline import run_one
 import habitat_sim as hs
 import magnum as mn
 
@@ -84,9 +83,10 @@ def effective_config_text(config_path, config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', type=Path, default=Path(__file__).resolve().parents[1] / 'config.yaml')
+    project_root = Path(__file__).resolve().parents[1]
+    parser.add_argument('--config', type=Path, default=project_root / 'configs' / 'default.yaml')
     parser.add_argument('--scene-dir', type=Path)
-    parser.add_argument('--output', type=Path, default=Path(__file__).resolve().parents[1] / 'results_full')
+    parser.add_argument('--output', type=Path, default=project_root / 'outputs' / 'default')
     parser.add_argument('--skip-bake', action='store_true')
     parser.add_argument('--bake-only', action='store_true')
     parser.add_argument('--force', action='store_true', help='重建已完成的路线目录')

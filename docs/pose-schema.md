@@ -1,0 +1,440 @@
+# 视频轨迹数据标注与存储规范
+
+**Video Trajectory Annotation & Data Storage Specification**
+
+## 一、总体规范
+
+本规范主要用于视频轨迹数据的采集、标注、存储及后续机器人学习任务。
+
+整体采用以下技术方案：
+
+**ROS 2 Standard Messages + Custom Tag Schema + MCAP**
+
+数据分为三个层次：
+
+|数据层级|英文名称|主要内容|
+|---|---|---|
+|观测数据|Observation|RGB 图像、Depth 深度图|
+|状态数据|State|Position、Orientation、Trajectory|
+|语义标注|Annotation|运动状态、轨迹特征、环境特征等 Tag|
+
+以一段完整的视频轨迹为单位，生成一个 MCAP 文件，记录对应的 RGB、Depth、Pose 和 Tag 信息。
+
+## 二、视频轨迹标注规则
+
+### 2.1 基本标注规则
+
+1. **标注单位**：以一条完整的视频轨迹（Video Trajectory）为单位进行标注，每条轨迹对应一个或多个 Tag。
+
+2. **多状态标注**：如果同一条轨迹中存在多种运动状态或场景特征，使用英文逗号（`,`）分隔不同 Tag。
+
+3. **标注时间范围**：Tag 无需记录对应状态的起始帧和终止帧，仅需标注该轨迹包含的状态。
+
+4. **标签独立性**：不同类别的 Tag 可以同时出现在同一条轨迹中。
+
+5. **标签命名**：统一采用英文 `snake_case` 命名格式，便于数据存储、检索和模型训练。
+
+
+### 2.2 Tag 分类及判定标准
+
+#### 1. 原地转向变化（In-place Rotation）
+
+用于标注主体在基本保持当前位置不变的情况下，发生的朝向变化。
+
+|朝向变化角度|中文描述|英文 Tag|
+|---|---|---|
+|0°–15°|不标注|None|
+|15°–45°|轻微原地转向|`in_place_rotation_minor`|
+|45°–90°|中度原地转向|`in_place_rotation_moderate`|
+|≥90°|剧烈原地转向|`in_place_rotation_major`|
+
+#### 2. 轨迹弧线及朝向变化（Curved Trajectory）
+
+用于标注主体运动轨迹呈弧线，且运动过程中伴随朝向变化的情况。
+
+|朝向变化角度|中文描述|英文 Tag|
+|---|---|---|
+|0°–15°|不标注|None|
+|15°–45°|轻微弧线转向|`curved_trajectory_minor`|
+|45°–90°|中度弧线转向|`curved_trajectory_moderate`|
+|≥90°|剧烈弧线转向|`curved_trajectory_major`|
+
+#### 3. 直线运动（Straight Movement）
+
+用于标注主体沿基本固定的方向移动，整体运动轨迹呈直线的情况。
+
+|中文描述|英文 Tag|判定标准|
+|---|---|---|
+|直线前进|`straight_forward`|主体沿正前方或基本固定的前进方向持续移动|
+|直线后退|`straight_backward`|主体沿与正常前进方向相反的方向直线移动|
+
+说明：
+
+- 直线前进和直线后退属于两种独立的运动状态。
+
+- 后退仅包含直线后退这一种情况，不再单独设置其他后退类型。
+
+
+#### 4. 台阶及斜坡（Elevation Changes）
+
+用于标注主体运动轨迹中涉及台阶或斜坡的情况，统一归为同一个 Tag，不再进一步细分。
+
+|中文描述|英文 Tag|判定标准|
+|---|---|---|
+|台阶或斜坡|`elevation_change`|轨迹中涉及台阶上/下行或斜坡上/下行|
+
+### 2.3 Tag 汇总
+
+目前共定义 9 个 Tag：
+
+|序号|标注类别|英文 Tag|
+|---|---|---|
+|1|轻微原地转向|`in_place_rotation_minor`|
+|2|中度原地转向|`in_place_rotation_moderate`|
+|3|剧烈原地转向|`in_place_rotation_major`|
+|4|轻微弧线转向|`curved_trajectory_minor`|
+|5|中度弧线转向|`curved_trajectory_moderate`|
+|6|剧烈弧线转向|`curved_trajectory_major`|
+|7|直线前进|`straight_forward`|
+|8|直线后退|`straight_backward`|
+|9|台阶或斜坡|`elevation_change`|
+
+## 三、数据格式与存储规范
+
+### 3.1 整体存储方案
+
+采用 MCAP 作为统一的数据容器，使用 ROS 2 标准消息记录观测数据和状态数据，使用自定义 Schema 记录轨迹语义标签。
+
+一个视频轨迹对应一个 MCAP 文件。
+
+建议文件命名格式：
+
+`trajectory_{trajectory_id}.mcap`
+
+例如：
+
+`trajectory_000001.mcap`
+
+### 3.2 MCAP Channel 组织方式
+
+|Channel Topic|ROS 2 消息类型 / Schema|数据内容|记录频率|
+|---|---|---|---|
+|`/camera/rgb`|`sensor_msgs/msg/Image`|RGB 图像|按视频帧记录|
+|`/camera/depth`|`sensor_msgs/msg/Image`|Depth 深度图|按深度帧记录|
+|`/camera/info`|`sensor_msgs/msg/CameraInfo`|相机内参、畸变参数|通常每段记录一次，参数变化时更新|
+|`/trajectory/pose`|`geometry_msgs/msg/PoseStamped`|主体位置和朝向|按 Pose 采样频率记录|
+|`/trajectory/tags`|Custom Protobuf Schema|整条轨迹的语义标签|每条轨迹记录一次|
+
+说明：
+
+- RGB 和 Depth 使用标准 Image 消息。
+
+- Pose 使用标准 PoseStamped 消息。
+
+- Tags 使用自定义 Protobuf Schema。
+
+- 每个 Channel 独立记录，通过时间戳建立数据关联。
+
+- 每条 MCAP 文件中的轨迹 ID 应保持一致。
+
+
+### 3.3 RGB 图像数据（Observation - RGB）
+
+采用 ROS 2 标准消息：
+
+`sensor_msgs/msg/Image`
+
+主要字段：
+
+|字段|含义|示例|
+|---|---|---|
+|Header.stamp|图像时间戳|Unix / ROS 时间戳|
+|Header.frame_id|相机坐标系|`camera_color_optical_frame`|
+|height|图像高度|480|
+|width|图像宽度|640|
+|encoding|图像编码|`rgb8`|
+|step|每行字节数|1920|
+|data|RGB 像素数据|原始图像字节流|
+
+推荐配置：
+
+- Encoding：`rgb8`
+
+- Resolution：根据原始视频分辨率确定
+
+- 存储方式：原始 RGB 或压缩图像
+
+
+如果需要节省存储空间，可以采用 JPEG 压缩，并使用：
+
+`sensor_msgs/msg/CompressedImage`
+
+### 3.4 Depth 深度图数据（Observation - Depth）
+
+采用 ROS 2 标准消息：
+
+`sensor_msgs/msg/Image`
+
+常见编码方式：
+
+|Encoding|数据类型|深度单位|说明|
+|---|---|---|---|
+|`16UC1`|16-bit unsigned integer|通常为 mm|存储空间较小|
+|`32FC1`|32-bit float|通常为 m|浮点深度，方便计算|
+
+推荐配置：
+
+- 优先考虑 `32FC1`，以米为单位存储。
+
+- 如果存储空间有限，可以使用 `16UC1`，并明确单位换算规则。
+
+- 明确无效深度值的表示方式。
+
+- 记录 RGB 与 Depth 是否经过空间对齐。
+
+- 记录相机内参及必要的 RGB-Depth 外参。
+
+
+### 3.5 Pose 位置与朝向数据（State - Pose）
+
+采用 ROS 2 标准消息：
+
+`geometry_msgs/msg/PoseStamped`
+
+每条 Pose 记录一个时间点的主体位置和朝向。
+
+**Position（位置）**
+
+|字段|含义|单位|
+|---|---|---|
+|position.x|X 轴位置|m|
+|position.y|Y 轴位置|m|
+|position.z|Z 轴位置|m|
+
+**Orientation（朝向）**
+
+使用 Quaternion（四元数）表示。
+
+|字段|含义|
+|---|---|
+|orientation.x|四元数 X|
+|orientation.y|四元数 Y|
+|orientation.z|四元数 Z|
+|orientation.w|四元数 W|
+
+示例：
+
+```
+header:
+  stamp:
+    sec: 1730000000
+    nanosec: 0
+  frame_id: "world"
+
+pose:
+  position:
+    x: 1.25
+    y: 0.50
+    z: 0.00
+
+  orientation:
+    x: 0.0
+    y: 0.0
+    z: 0.3827
+    w: 0.9239
+```
+
+说明：
+
+- Position 使用米（m）作为单位。
+
+- Orientation 统一使用 Quaternion。
+
+- 四元数排列顺序统一为 x、y、z、w。
+
+- 明确 Pose 所属的参考坐标系，例如 `world`、`map` 或 `base_link`。
+
+- 所有 Pose 按时间顺序记录，形成完整的轨迹序列。
+
+
+### 3.6 相机内参（Camera Intrinsics）
+
+采用 ROS 2 标准消息：
+
+`sensor_msgs/msg/CameraInfo`
+
+建议记录：
+
+- 图像分辨率。
+
+- 相机内参矩阵 K。
+
+- 畸变参数 D。
+
+- 相机畸变模型。
+
+- 相机坐标系。
+
+
+如果 RGB 和 Depth 来自不同相机，还需要记录两者之间的外参（Extrinsics）。
+
+### 3.7 轨迹语义标签（Annotation - Tags）
+
+采用自定义 Protobuf Schema 记录。
+
+Tag 是针对整条视频轨迹的整体描述，不需要在每一帧重复记录，也不需要记录起始帧和终止帧。
+
+建议数据结构：
+
+```
+{
+  "trajectory_id": "trajectory_000001",
+  "tags": [
+    "straight_forward",
+    "elevation_change"
+  ]
+}
+```
+
+字段说明：
+
+|字段|类型|含义|
+|---|---|---|
+|trajectory_id|string|轨迹唯一 ID|
+|tags|repeated string|轨迹包含的语义标签|
+
+注意：上述 JSON 仅用于说明字段结构，实际 MCAP 中建议使用正式定义的 Protobuf Schema，并通过 MCAP Schema 和 Channel 进行存储。
+
+## 四、时间戳与数据同步规范
+
+RGB、Depth、Pose 必须采用统一的时间基准，以保证不同类型的数据能够正确关联。
+
+|数据|时间戳要求|
+|---|---|
+|RGB|每帧记录真实采集时间戳|
+|Depth|每帧记录真实采集时间戳|
+|Pose|每个采样点记录对应时间戳|
+|CameraInfo|记录参数对应的时间戳或有效版本|
+|Tags|与对应 trajectory_id 关联|
+
+具体要求：
+
+1. RGB、Depth 和 Pose 不要求具有完全相同的采样频率。
+
+2. 不同数据通道必须保留真实时间戳，不能仅依赖帧序号进行匹配。
+
+3. RGB 与 Depth 应尽可能实现时间同步和空间对齐。
+
+4. 如果 Pose 频率低于视频帧率，应保留原始采样时间，不应随意伪造 Pose 时间戳。
+
+5. 所有数据必须明确时间戳的时钟来源和单位。
+
+
+## 五、数据组织与文件结构
+
+建议每条视频轨迹生成一个独立的 MCAP 文件。
+
+示例：
+
+```
+dataset/
+│
+├── trajectory_000001.mcap
+├── trajectory_000002.mcap
+├── trajectory_000003.mcap
+│
+└── metadata/
+    └── tag_schema.proto
+```
+
+其中：
+
+- `trajectory_000001.mcap`：包含该轨迹的 RGB、Depth、Pose、CameraInfo 和 Tags。
+
+- `tag_schema.proto`：统一定义 Tag 数据结构。
+
+
+每条轨迹使用唯一的 `trajectory_id`，保证文件、轨迹和标签之间能够正确关联。
+
+## 六、标注示例
+
+**示例 1：直线前进**
+
+```
+{
+  "trajectory_id": "trajectory_000001",
+  "tags": [
+    "straight_forward"
+  ]
+}
+```
+
+**示例 2：直线后退**
+
+```
+{
+  "trajectory_id": "trajectory_000002",
+  "tags": [
+    "straight_backward"
+  ]
+}
+```
+
+**示例 3：中度原地转向，同时涉及台阶**
+
+```
+{
+  "trajectory_id": "trajectory_000003",
+  "tags": [
+    "in_place_rotation_moderate",
+    "elevation_change"
+  ]
+}
+```
+
+**示例 4：轻微弧线转向，同时涉及斜坡**
+
+```
+{
+  "trajectory_id": "trajectory_000004",
+  "tags": [
+    "curved_trajectory_minor",
+    "elevation_change"
+  ]
+}
+```
+
+## 七、最终技术方案汇总
+
+|数据模块|推荐技术方案|主要用途|
+|---|---|---|
+|数据容器|MCAP|统一存储所有数据|
+|RGB|`sensor_msgs/msg/Image`|视觉观测|
+|Depth|`sensor_msgs/msg/Image`|深度观测|
+|Camera Intrinsics|`sensor_msgs/msg/CameraInfo`|相机参数|
+|Position & Orientation|`geometry_msgs/msg/PoseStamped`|空间状态|
+|Trajectory|连续 Pose 序列|运动轨迹|
+|Tags|Custom Protobuf Schema|轨迹语义标注|
+|时间同步|Timestamp|多模态数据对齐|
+
+**最终方案：**
+
+采用 ROS 2 标准消息记录 RGB、Depth、Pose 和 CameraInfo，采用自定义 Protobuf Schema 记录轨迹级别的 Tags，统一封装到 MCAP 文件中。
+
+通过统一的时间戳和 trajectory_id，实现视频图像、深度信息、空间位置、朝向及语义标签之间的关联，为后续机器人模仿学习、运动预测和行为理解提供标准化的数据基础。
+
+## 八、实施前需要统一的细节
+
+为保证不同采集设备和标注人员产生的数据具有一致性，正式执行前还需要确定：
+
+1. **角度边界**：15°、45°、90° 的区间归属，避免边界重复。
+
+2. **转向角度计算方式**：明确使用连续轨迹的累计朝向变化还是首尾朝向差。
+
+3. **坐标系定义**：统一世界坐标系、主体坐标系和相机坐标系。
+
+4. **Depth 单位**：统一采用 m 或 mm，并明确无效值。
+
+5. **时间同步方式**：明确 RGB、Depth、Pose 的采样频率及时间戳来源。
+
+6. **直线与弧线判定标准**：明确轨迹偏离直线的容许范围，保证标注一致性。

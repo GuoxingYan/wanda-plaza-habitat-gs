@@ -1,7 +1,7 @@
 """NavMesh 代理宽度与额外障碍余量的配置验证。"""
 import unittest
 
-from wanda_nav.planning import navmesh_agent_radius
+from src.planning import navmesh_agent_radius
 
 
 class NavmeshClearanceTest(unittest.TestCase):

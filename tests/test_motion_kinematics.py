@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from wanda_nav.motion import build_linear_segment, trapezoidal_speed_profile, yaw_steps
+from src.motion import build_linear_segment, trapezoidal_speed_profile, yaw_steps
 
 
 class MotionKinematicsTest(unittest.TestCase):

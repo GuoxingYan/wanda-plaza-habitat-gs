@@ -1,9 +1,9 @@
-# 全密度 Gaussian 的 50 条路线生成配置。数值单位均为米、秒、度或弧度，除非字段另有说明。
+# 全密度 Gaussian 的 5 条新路线生成配置。数值单位均为米、秒、度或弧度，除非字段另有说明。
 scene:
   # 裁剪场景目录；其中应包含同规格裁剪的 mesh、Gaussian PLY 和 stage 配置。
-  directory: deployment/scene_fullres
+  directory: data/scene_fullres
   # true 时从碰撞 mesh 重新烘焙并覆盖 NavMesh；false 时复用已有 NavMesh。
-  bake_navmesh: true
+  bake_navmesh: false
 
 navmesh:
   # Recast 水平栅格边长；越小越精细，但烘焙更慢、内存占用更高。
@@ -12,8 +12,7 @@ navmesh:
   cell_height_m: 0.05
   # 机器人/行人代理总宽度；半径由宽度的一半计算，用于墙边安全距离。
   agent_width_m: 0.75
-  # 额外障碍物净距；NavMesh代理半径将为0.75/2+0.15=0.525米。
-  # 该余量会收缩窄路可行区域，让路线中心尽量远离墙面、立柱和其他障碍。
+  # 额外障碍物净距；烘焙半径=机体半宽+此值，窄路中路线中心会更远离边缘和障碍。
   obstacle_clearance_m: 0.15
   # 代理碰撞高度；低于此高度的空间会被判为不可通行。
   agent_height_m: 1.5
@@ -26,11 +25,11 @@ navmesh:
 
 navigation:
   # 固定随机种子，保证随机选取路线可复现。
-  seed: 17
+  seed: 20261109
   # 是否使用 cameras.json 采集相机中心轨迹作为可行区域先验；开启时 NavMesh 路径必须位于缓冲区内。
   use_camera_trajectory_prior: true
   # 原始相机中心轨迹 JSON；相对路径按项目根目录解析，位置统一转换为 Habitat X/Y/Z。
-  camera_trajectory_file: Wanda Plaza/cameras.json
+  camera_trajectory_file: data/Wanda Plaza/cameras.json
   # 采集轨迹周围允许导航的平面距离（米）；轨迹缓冲区以 X/Z 平面计算。
   camera_trajectory_buffer_m: 10.0
   # 起点/终点优先从采集相机中心位置投影到 NavMesh 后选取；false 时只用三角面面积加权采样。
@@ -72,6 +71,28 @@ motion:
   # RGB 相机安装高度（米），相对于代理地面位置。
   camera_height_m: 1.5
 
+avoidance:
+  # 开关：启用后在路线中段放置程序化圆柱并重新规划绕行路线。
+  enabled: false
+  # 障碍物沿原路线累计距离的放置比例；0.5 表示中点。
+  placement_fraction: 0.5
+  # 圆柱实体半径（米）；当前原型尚未检查障碍本身与原场景的几何碰撞。
+  obstacle_radius_m: 0.35
+  # 圆柱实体高度（米），必须大于 0.5 米。
+  obstacle_height_m: 1.0
+  # 路径距障碍中心小于此距离时触发绕行（米）。
+  trigger_distance_m: 2.0
+  # 代理半宽之外的额外绕行净距（米）。
+  safety_margin_m: 0.25
+  # 绕行 A* 网格分辨率（米）。
+  grid_resolution_m: 0.15
+  # 原始路线两侧允许搜索的最大走廊宽度（米）。
+  corridor_width_m: 4.0
+  # A* 最大扩展网格单元数。
+  max_search_cells: 250000
+  # 自验证时可强制触发。
+  force: false
+
 camera:
   # D435 RGB 传感器图像宽度（像素）。
   width: 1280
@@ -106,7 +127,7 @@ output:
 # 批量生成控制：每条路线分别输出视频、JSON 和俯视图。
 generation:
   # 要生成的导航轨迹条数；每条使用 seed + 条目索引，输出到 route_0000 等目录。
-  trajectory_count: 50
+  trajectory_count: 5
 
 # 俯视图绘制参数，改变外观不会改变碰撞几何或导航结果。
 visualization:

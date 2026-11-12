@@ -1,5 +1,5 @@
 import concurrent.futures, pathlib, subprocess, time
-root=pathlib.Path('/data/projects/CloudRobo/habitat-gs')
+root=pathlib.Path(__file__).resolve().parents[1]/'third_party'/'habitat-gs'
 text=subprocess.check_output(['git','config','--file','.gitmodules','--get-regexp','submodule.*.url'],cwd=root,text=True)
 urls={l.split()[0].removeprefix('submodule.').removesuffix('.url'):l.split()[1] for l in text.splitlines()}
 links=subprocess.check_output(['git','ls-tree','HEAD','src/deps/'],cwd=root,text=True)
@@ -9,7 +9,9 @@ for line in links.splitlines():
  if mode=='160000' and path not in ['src/deps/bullet3','src/deps/rlr-audio-propagation']:jobs.append((path,sha,urls[path]))
 def run(job):
  path,sha,url=job;p=root/path;p.mkdir(exist_ok=True)
- with open(root.parent/'deployment/logs'/('fetch-'+p.name+'.log'),'w') as log:
+ log_dir=root.parent/'data/logs'
+ log_dir.mkdir(parents=True, exist_ok=True)
+ with open(log_dir/('fetch-'+p.name+'.log'),'w') as log:
   def cmd(*a):return subprocess.run(a,cwd=p,stdout=log,stderr=log).returncode
   if not (p/'.git').exists():cmd('git','init');cmd('git','remote','add','origin',url)
   for trial in range(3):

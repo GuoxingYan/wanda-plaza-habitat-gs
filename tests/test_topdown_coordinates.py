@@ -1,9 +1,9 @@
 """用非对称四角颜色检测俯视底图的翻转和边界丢点。"""
 import unittest
 import numpy as np
-from wanda_nav.visualization import (_load_cached_navmesh, _mesh_image_extent, _pixel_colors,
+from src.visualization import (_load_cached_navmesh, _mesh_image_extent, _pixel_colors,
                                      _static_visualization_key)
-from wanda_nav.visualization import project_navmesh_to_topdown_pixels
+from src.visualization import project_navmesh_to_topdown_pixels
 
 class TopdownCoordinatesTest(unittest.TestCase):
     def test_navmesh_triangle_cache_avoids_rebuilding_islands(self):

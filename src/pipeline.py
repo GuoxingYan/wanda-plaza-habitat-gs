@@ -10,14 +10,16 @@ import magnum as mn
 import numpy as np
 from PIL import Image
 
-from .planning import (build_motion, camera_trajectory_island_stats, choose_route, load_camera_trajectory,
+from src.planning import (build_motion, camera_trajectory_island_stats, choose_route, load_camera_trajectory,
                        navmesh_agent_radius,
                        quaternion_xyzw, resolve_path, route_within_camera_buffer,
                        yaw_quaternion)
-from .visualization import (topdown_plots, save_gaussian_navmesh_overlay,
+from src.visualization import (topdown_plots, save_gaussian_navmesh_overlay,
                             save_camera_density_comparison,
                             project_navmesh_world_to_topdown_pixels,
                             render_ground_sliced_gaussian_topdown)
+from src.avoidance import (add_render_obstacle, composite_obstacle_rgb,
+                        plan_around_synthetic_obstacle)
 
 
 def run_one(args, config, render_sim=None):
@@ -54,8 +56,22 @@ def run_one(args, config, render_sim=None):
     assert pathfinder.navigable_area > 10
     largest_island = int(np.argmax([pathfinder.island_area(i) for i in range(pathfinder.num_islands)]))
     path, island = choose_route(pathfinder, config, navmesh_path=navmesh_path)
-    points = np.asarray(path.points, dtype=np.float32)
+    original_points = np.asarray(path.points, dtype=np.float32)
+    points, obstacle = plan_around_synthetic_obstacle(pathfinder, original_points, config)
     frames = build_motion(pathfinder, points, config)
+    if obstacle and obstacle.get("triggered"):
+        actual_positions = np.asarray([frame[0] for frame in frames], dtype=np.float64)
+        obstacle_xz = np.asarray(obstacle["center"], dtype=np.float64)[[0, 2]]
+        actual_clearance = np.linalg.norm(actual_positions[:, [0, 2]] - obstacle_xz, axis=1)
+        minimum_clearance = float(actual_clearance.min())
+        required_clearance = float(obstacle["planning_clearance_radius_m"])
+        if minimum_clearance < required_clearance - 0.03:
+            raise RuntimeError(
+                "实际逐帧轨迹未满足临时障碍净距："
+                f"{minimum_clearance:.3f}m < {required_clearance:.3f}m")
+        obstacle["actual_min_center_distance_m"] = minimum_clearance
+        obstacle["actual_clearance_margin_m"] = minimum_clearance - (
+            float(obstacle["radius_m"]) + float(nav["agent_width_m"]) / 2.0)
     camera_prior = load_camera_trajectory(config)
     density_report = None
     if camera_prior is not None:
@@ -114,8 +130,10 @@ def run_one(args, config, render_sim=None):
                   agent_width_m=nav["agent_width_m"], agent_radius_m=effective_agent_radius,
                   obstacle_clearance_m=nav.get("obstacle_clearance_m", 0.0),
                   agent_height_m=nav["agent_height_m"], geodesic_distance_m=float(path.geodesic_distance),
+                  planned_path_length_m=float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum()),
                   navigation_steps=len(frames) - 1, goal_error_m=float(np.linalg.norm(frames[-1][0] - points[-1])),
                   all_steps_navigable=all(pathfinder.is_navigable(frame[0].astype(np.float32), 0.15) for frame in frames))
+    report["synthetic_obstacle"] = obstacle
     report["camera_trajectory_prior"] = {
         "enabled": camera_prior is not None,
         "source_file": camera_prior["source_file"] if camera_prior else None,
@@ -133,7 +151,7 @@ def run_one(args, config, render_sim=None):
                              else "configured_or_navmesh_sample"),
     }
     report["camera_trajectory_density_filter"] = density_report
-    topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, island)
+    topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, island, obstacle)
 
     if config["output"].get("gaussian_navmesh_overlay", False) and not args.bake_only:
         import matplotlib
@@ -181,6 +199,14 @@ def run_one(args, config, render_sim=None):
             owns_simulator = False
         try:
             assert sim.pathfinder.load_nav_mesh(str(navmesh_path)); assert hs.cuda_enabled, "CUDA disabled"
+            render_obstacle = add_render_obstacle(sim, obstacle)
+            keyframe_indices = {0, len(frames) // 2, len(frames) - 1}
+            if obstacle and obstacle.get("triggered"):
+                distances_to_obstacle = [float(np.linalg.norm(position[[0, 2]]
+                    - np.asarray(obstacle["center"])[[0, 2]])) for position, _, _ in frames]
+                closest_frame = int(np.argmin(distances_to_obstacle))
+                keyframe_indices.add(closest_frame)
+                obstacle["closest_approach_frame_index"] = closest_frame
             writer_context = (imageio.get_writer(str(video_path), fps=config["motion"]["fps"], macro_block_size=2)
                               if config["output"]["video"] else None)
             try:
@@ -189,11 +215,15 @@ def run_one(args, config, render_sim=None):
                     sim.initialize_agent(0, state)
                     render_start = time.perf_counter()
                     rgb = sim.get_sensor_observations()["rgb"][:, :, :3]
+                    rgb = composite_obstacle_rgb(
+                        rgb, obstacle,
+                        position + np.array([0, config["motion"]["camera_height_m"], 0]),
+                        yaw, camera)
                     render_times.append(time.perf_counter() - render_start)
                     image_stds.append(float(rgb.std()))
                     if writer_context:
                         writer_context.append_data(rgb)
-                    if config["output"]["rgb_keyframes"] and index in {0, len(frames) // 2, len(frames) - 1}:
+                    if config["output"]["rgb_keyframes"] and index in keyframe_indices:
                         Image.fromarray(rgb).save(output_dir / f"rgb_{index:04d}.png")
                     camera_position = position + np.array([0, config["motion"]["camera_height_m"], 0])
                     frame_records.append({"frame_index": index, "timestamp_s": float(timestamp),
@@ -204,6 +234,10 @@ def run_one(args, config, render_sim=None):
             finally:
                 if writer_context:
                     writer_context.close()
+                if render_obstacle is not None:
+                    obstacle_object, obstacle_mesh = render_obstacle
+                    sim.get_rigid_object_manager().remove_object_by_id(obstacle_object.object_id)
+                    Path(obstacle_mesh).unlink(missing_ok=True)
         finally:
             if owns_simulator:
                 sim.close()

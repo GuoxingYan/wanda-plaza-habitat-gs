@@ -30,8 +30,8 @@ def basis(d):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", type=Path, default=Path("/data/projects/CloudRobo/Wanda Plaza"))
-    ap.add_argument("--out", type=Path, default=Path("/data/projects/CloudRobo/deployment/scene_crop"))
+    ap.add_argument("--input", type=Path, default=Path(__file__).resolve().parents[1] / "data" / "Wanda Plaza")
+    ap.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[1] / "data" / "scene_crop")
     ap.add_argument("--crop", type=float, nargs=4, metavar=("XMIN", "XMAX", "YMIN", "YMAX"), default=[-50, 10, -40, 20])
     ap.add_argument("--gaussian-stride", type=int, default=1,
                     help="保留每隔多少个 Gaussian；1 保留全部，值越大越省内存但画质越差")

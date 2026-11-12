@@ -3,7 +3,7 @@ import unittest
 import tempfile
 from pathlib import Path
 
-from wanda_nav.cli import effective_config_text, is_route_complete, required_route_outputs
+from src.cli import effective_config_text, is_route_complete, required_route_outputs
 
 
 class BatchResumeTest(unittest.TestCase):

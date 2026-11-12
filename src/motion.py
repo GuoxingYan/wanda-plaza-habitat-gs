@@ -93,6 +93,17 @@ def build_linear_segment(start, target, start_yaw, start_time, fps,
         position = actual
         elapsed += dt
         frames.append((position.copy(), float(start_yaw), elapsed))
+    remaining = float(np.linalg.norm(position - target))
+    if remaining > 1e-6 and remaining <= max_speed * dt and is_navigable(
+            target.astype(np.float32), 0.15):
+        # try_step 可能将最后一步投影到多边形边缘；若目标仍在单帧步长内且本身可行，
+        # 将末帧精确落在目标点，避免数厘米误差沿多段转折持续累积。
+        previous = position.copy()
+        if np.linalg.norm(target - previous) <= max_speed * dt + 1e-6:
+            position = target.copy()
+            if frames:
+                frames[-1] = (position.copy(), float(start_yaw), elapsed)
     if np.linalg.norm(position - target) > 0.03:
-        raise RuntimeError("NavMesh 投影导致轨迹无法到达路径转折点")
+        raise RuntimeError("NavMesh 投影导致轨迹无法到达路径转折点："
+                           f"remaining={np.linalg.norm(position - target):.4f}m")
     return frames, position, elapsed

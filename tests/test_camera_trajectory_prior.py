@@ -4,7 +4,7 @@ import unittest
 import numpy as np
 from scipy.spatial import cKDTree
 
-from wanda_nav.planning import (_SNAPPED_CANDIDATE_CACHE, _snapped_camera_candidates,
+from src.planning import (_SNAPPED_CANDIDATE_CACHE, _snapped_camera_candidates,
                                 _load_camera_trajectory_file, classify_camera_trajectory_islands,
                                 route_within_camera_buffer)
 

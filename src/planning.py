@@ -7,10 +7,10 @@ import habitat_sim as hs
 import numpy as np
 import yaml
 from habitat_sim.utils.common import quat_from_angle_axis
-from .motion import build_linear_segment, yaw_steps
+from src.motion import build_linear_segment, yaw_steps
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 _SNAPPED_CANDIDATE_CACHE = {}
 
 
@@ -42,6 +42,15 @@ def load_config(path):
         assert motion.get(key, 0) > 0, f"motion.{key} 必须为正数"
     assert motion["fps"] > 0 and camera["width"] > 0 and camera["height"] > 0
     assert config["navmesh"]["agent_width_m"] > 0 and config["navmesh"]["agent_height_m"] > 0
+    avoidance = config.get("avoidance", {})
+    if avoidance.get("enabled", False):
+        assert avoidance.get("obstacle_radius_m", 0) > 0
+        assert avoidance.get("obstacle_height_m", 0) > 0.5
+        assert avoidance.get("trigger_distance_m", -1) >= 0
+        assert avoidance.get("safety_margin_m", -1) >= 0
+        assert avoidance.get("grid_resolution_m", 0) > 0
+        assert avoidance.get("max_search_cells", 0) > 0
+        assert 0 < avoidance.get("placement_fraction", 0.5) < 1
     assert nav["sample_attempts"] > 0
     topdown_max_points = config["output"].get("topdown_max_points")
     assert topdown_max_points is None or topdown_max_points > 0
