@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f5f2">
+  <title>CloudRobo 周报 | 2026.11.03–11.09</title>
+  <style>
+    :root{--ink:#172522;--muted:#60706c;--paper:#f3f5f2;--white:#fff;--line:#dbe2dd;--green:#176f5b;--mint:#d9eee5;--coral:#cc6748;--yellow:#e9bb55;--blue:#427c9b;--shadow:0 16px 48px #162a2010}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--paper);color:var(--ink);font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;line-height:1.65}
+    .shell{max-width:1120px;margin:0 auto;padding:34px 28px 70px}.topbar{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding:0 0 14px;color:var(--muted);font-size:13px}.brand{color:var(--ink);font-weight:800;letter-spacing:.08em}.topbar span:last-child{font-variant-numeric:tabular-nums}
+    .hero{position:relative;overflow:hidden;margin:26px 0 18px;padding:45px 48px 42px;background:#143d34;color:#f7fbf8;box-shadow:var(--shadow)}.hero:after{content:"";position:absolute;width:370px;height:370px;border:1px solid #ffffff24;border-radius:50%;right:-65px;top:-190px;box-shadow:0 0 0 32px #ffffff0a,0 0 0 78px #ffffff08}.eyebrow{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#b7dacb}.hero h1{font-size:clamp(34px,5vw,58px);line-height:1.13;max-width:700px;margin:10px 0 16px;letter-spacing:0}.hero p{max-width:670px;margin:0;color:#d2e4dc;font-size:16px}.hero-meta{position:relative;z-index:1;margin-top:27px;display:flex;gap:10px;flex-wrap:wrap}.hero-meta span{border:1px solid #ffffff35;padding:5px 10px;font-size:12px;color:#e5f0eb}
+    .section-title{display:flex;justify-content:space-between;align-items:end;margin:40px 0 14px}.section-title h2{margin:0;font-size:21px;letter-spacing:0}.section-title small{color:var(--muted)}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric{background:var(--white);border:1px solid var(--line);padding:19px 20px;min-height:126px;box-shadow:var(--shadow)}.metric .label{color:var(--muted);font-size:12px}.metric strong{display:block;font-size:31px;line-height:1.2;margin:7px 0 5px;font-variant-numeric:tabular-nums}.metric em{font-size:12px;color:var(--green);font-style:normal}
+    .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:14px}.panel{background:var(--white);border:1px solid var(--line);padding:22px 24px;box-shadow:var(--shadow)}.panel h3{font-size:16px;margin:0 0 16px}.chart-note{font-size:12px;color:var(--muted);margin-top:8px}.bar-row{display:grid;grid-template-columns:92px 1fr 48px;gap:10px;align-items:center;margin:13px 0;font-size:13px}.track{height:14px;background:#edf1ee;position:relative}.bar{height:100%;background:var(--green)}.bar.coral{background:var(--coral)}.bar.blue{background:var(--blue)}.bar.yellow{background:var(--yellow)}.bar-row b{text-align:right;font-variant-numeric:tabular-nums}.ring-wrap{display:flex;gap:25px;align-items:center}.ring{width:152px;height:152px;flex:none}.legend{font-size:13px;color:var(--muted)}.legend div{display:flex;gap:8px;align-items:center;margin:9px 0}.dot{width:9px;height:9px;border-radius:50%;background:var(--green)}.dot.gray{background:#cbd4ce}.legend strong{color:var(--ink)}
+    .timeline{position:relative;padding-left:22px}.timeline:before{content:"";position:absolute;left:5px;top:7px;bottom:10px;width:1px;background:var(--line)}.event{position:relative;padding:0 0 22px 8px}.event:before{content:"";position:absolute;left:-21px;top:7px;width:9px;height:9px;border-radius:50%;background:var(--green);border:3px solid var(--mint)}.event time{font-size:11px;color:var(--coral);font-weight:800;letter-spacing:.06em}.event h4{font-size:15px;margin:3px 0 4px}.event p{font-size:13px;color:var(--muted);margin:0}.split{display:grid;grid-template-columns:1fr 1fr;gap:14px}.list{list-style:none;margin:0;padding:0}.list li{position:relative;padding:0 0 13px 19px;font-size:14px}.list li:before{content:"";position:absolute;left:0;top:8px;width:7px;height:7px;background:var(--green)}.list strong{color:var(--ink)}.list span{color:var(--muted)}.callout{border-left:3px solid var(--yellow);background:#fbf8ee;padding:14px 16px;font-size:13px;color:#5c5541;margin-top:14px}.pill{display:inline-block;padding:2px 8px;background:var(--mint);color:var(--green);font-size:11px;font-weight:700;margin-right:6px}.footer{border-top:1px solid var(--line);margin-top:42px;padding-top:15px;display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:11px}
+    @media(max-width:760px){.shell{padding:20px 16px 44px}.hero{padding:32px 24px}.metrics{grid-template-columns:repeat(2,1fr)}.grid,.split{grid-template-columns:1fr}.section-title{align-items:start;gap:8px;flex-direction:column}.panel{padding:18px}.ring-wrap{gap:16px}.ring{width:126px;height:126px}.footer{flex-direction:column}}
+    @media print{body{background:white}.shell{max-width:none;padding:0}.hero,.panel,.metric{box-shadow:none;break-inside:avoid}.hero{print-color-adjust:exact;-webkit-print-color-adjust:exact}.panel,.metric{border-color:#cbd4ce}.section-title{margin-top:24px}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar"><div class="brand">CLOUDROBO <span style="color:var(--green)">/</span> ENGINEERING</div><span>周报 · 2026.11.03 — 11.09</span></header>
+    <section class="hero">
+      <div class="eyebrow">Weekly field notes · Habitat-GS</div>
+      <h1>从场景接入<br>走向完整导航流水线</h1>
+      <p>本周围绕 Wanda Plaza 场景，完成导航验证工程的参数化与流水线整合，推进全场景数据批处理，并持续完善采集轨迹约束、结果可视化和可复现性。</p>
+      <div class="hero-meta"><span>项目：CloudRobo</span><span>场景：Wanda Plaza</span><span>本周提交：11 项</span><span>范围：导航 / 渲染 / 验证</span></div>
+    </section>
+
+    <div class="section-title"><h2>本周快照</h2><small>以仓库提交、运行报告与场景配置为依据</small></div>
+    <section class="metrics">
+      <article class="metric"><div class="label">可复用采集轨迹记录</div><strong>30,276</strong><em>相机位置用于路线先验</em></article>
+      <article class="metric"><div class="label">全场单路线实测距离</div><strong>46.83<span style="font-size:16px"> m</span></strong><em>终点误差 0 m</em></article>
+      <article class="metric"><div class="label">导航步进检查</div><strong>通过</strong><em>所有移动步均落在 NavMesh</em></article>
+      <article class="metric"><div class="label">全场渲染配置</div><strong>1280×720</strong><em>面向批量路线验证</em></article>
+    </section>
+
+    <div class="section-title"><h2>进展分布</h2><small>按本周工程交付归类</small></div>
+    <section class="grid">
+      <article class="panel">
+        <h3>工作重心</h3>
+        <div class="bar-row"><span>导航流水线</span><div class="track"><div class="bar" style="width:94%"></div></div><b>核心</b></div>
+        <div class="bar-row"><span>全场批处理</span><div class="track"><div class="bar coral" style="width:78%"></div></div><b>推进</b></div>
+        <div class="bar-row"><span>诊断可视化</span><div class="track"><div class="bar blue" style="width:72%"></div></div><b>增强</b></div>
+        <div class="bar-row"><span>自动化测试</span><div class="track"><div class="bar yellow" style="width:64%"></div></div><b>补齐</b></div>
+        <p class="chart-note">定性展示本周投入方向，不代表完成率或工时占比。</p>
+      </article>
+      <article class="panel">
+        <h3>本周交付状态</h3>
+        <div class="ring-wrap">
+          <svg class="ring" viewBox="0 0 160 160" role="img" aria-label="11项提交：8项功能或增强、3项修复或重构">
+            <circle cx="80" cy="80" r="58" fill="none" stroke="#e5ebe6" stroke-width="18"/>
+            <circle cx="80" cy="80" r="58" fill="none" stroke="#176f5b" stroke-width="18" stroke-dasharray="265 365" transform="rotate(-90 80 80)"/>
+            <circle cx="80" cy="80" r="58" fill="none" stroke="#cc6748" stroke-width="18" stroke-dasharray="99 365" stroke-dashoffset="-265" transform="rotate(-90 80 80)"/>
+            <text x="80" y="76" text-anchor="middle" font-size="27" font-weight="800" fill="#172522">11</text><text x="80" y="97" text-anchor="middle" font-size="11" fill="#60706c">次提交</text>
+          </svg>
+          <div class="legend"><div><i class="dot"></i><strong>8</strong> 功能与体验增强</div><div><i class="dot" style="background:var(--coral)"></i><strong>3</strong> 修复与结构调整</div><div><i class="dot gray"></i>覆盖 11 月 5–9 日</div></div>
+        </div>
+      </article>
+    </section>
+
+    <div class="section-title"><h2>关键进展</h2><small>按研发推进顺序</small></div>
+    <section class="panel timeline">
+      <article class="event"><time>11.05 · 验证工程成型</time><h4>将导航验证改造成可配置流程</h4><p>抽离规划、执行与可视化模块，统一 YAML 参数；推进全场景批量运行能力，路线速度配置为 3 m/s。</p></article>
+      <article class="event"><time>11.06 · 约束与诊断增强</time><h4>引入采集轨迹先验，升级高分辨率诊断图</h4><p>利用相机采集位置约束路线候选；补齐高清俯视图、米制坐标对齐、NavMesh 连通岛和覆盖密度视图。</p></article>
+      <article class="event"><time>11.07 · 批处理准备</time><h4>准备全分辨率 50 路线批次与复核入口</h4><p>加入批次续跑、运动学相关测试和 1280×720 配置，整理第三方复核所需的运行入口。</p></article>
+      <article class="event"><time>11.09 · 流水线整合</time><h4>完成导航流水线主要组件与结果导出整理</h4><p>收敛 CLI、路线规划、结果摘要与相机导航位姿输出格式；修复 NavMesh 投影边界浮点误差。</p></article>
+    </section>
+
+    <div class="section-title"><h2>交付与质量</h2><small>完成项与边界清晰区分</small></div>
+    <section class="split">
+      <article class="panel"><h3><span class="pill">已交付</span>本周沉淀</h3><ul class="list">
+        <li><strong>可配置导航验证流水线</strong><br><span>参数、路线规划、执行与验证入口统一管理。</span></li>
+        <li><strong>采集数据驱动的路线筛选</strong><br><span>相机轨迹缓冲约束与连通岛覆盖密度过滤。</span></li>
+        <li><strong>高分辨率空间诊断</strong><br><span>全场/局部俯视图、网格叠加和坐标回归测试。</span></li>
+        <li><strong>批处理与报告工具</strong><br><span>50 条路线批次配置、续跑机制及 HTML 汇总生成器。</span></li>
+      </ul></article>
+      <article class="panel"><h3><span class="pill" style="background:#f7e9e3;color:#a04e35">验证证据</span>实测与限制</h3><ul class="list">
+        <li><strong>全场单路线验证通过</strong><br><span>46.83 m 测地路径，终点误差 0，步进检查通过，轨迹缓冲检查通过。</span></li>
+        <li><strong>裁剪场景基线可复现</strong><br><span>771.76 m² 可导航面积、30.46 m 路线、119 步、640×360 RGB。</span></li>
+        <li><strong>批量状态需以产物确认</strong><br><span>50 路线批处理配置和汇总工具已具备；本周可核验的证据不代表 50 条全部成功。</span></li>
+        <li><strong>视图仍有解释边界</strong><br><span>高空 Gaussian 俯视存在拉丝，mesh 顶视颜色聚合不含深度遮挡。</span></li>
+      </ul><div class="callout">当前报告聚焦导航流水线、渲染和验证进展。全场完整批次是否完成，以及逐条成功率，建议以最终批次报告复核后再对外确认。</div></article>
+    </section>
+
+    <div class="section-title"><h2>下周关注</h2><small>建议优先级</small></div>
+    <section class="panel"><div class="split"><ul class="list">
+      <li><strong>确认全分辨率批次闭环</strong><br><span>核对目标路线数、成功率、失败 seed 重试和最终报告。</span></li>
+      <li><strong>抽样复核路线质量</strong><br><span>对照彩色 mesh、NavMesh、轨迹先验和 RGB 关键帧检查空间一致性。</span></li>
+    </ul><ul class="list">
+      <li><strong>稳定报告与产物索引</strong><br><span>明确报告、视频、位姿 JSON 的路径规则和批次元信息。</span></li>
+      <li><strong>收敛已知可视化限制</strong><br><span>继续评估高空视角与顶视投影的适用范围，并在文档中保持限制说明。</span></li>
+    </ul></div></section>
+    <footer class="footer"><span>CloudRobo · 周报根据 2026.11.03–11.09 仓库提交、项目文档与验证产物整理</span><span>内部研发同步 · 2026.11.09</span></footer>
+  </main>
+</body>
+</html>

@@ -50,6 +50,7 @@ mesh 和 Gaussian 使用同一源坐标包围盒；mesh 三角形仅在三个顶
 
 - `validation.json`：生效配置摘要、NavMesh/路径统计、逐帧验证结果。
 - `navigation_poses.json`：起终点及每帧相机 `position` 和 `xyzw` 四元数，不记录 agent 字段。
+- `trajectory_<route_id>.mcap`：ROS 2 CDR 编码的 RGB、米制 `32FC1` Depth、CameraInfo、PoseStamped，以及默认 `straight_forward` 轨迹标签。
 - `navigation_rgb.mp4`、`rgb_*.png`：全密度 Gaussian 的相机视角渲染。
 - `trajectory_topdown.png`：NavMesh、轨迹、起终点与障碍标记。
 - `mesh_navmesh_topdown.png`：彩色 mesh 顶视聚合与 NavMesh 叠图。

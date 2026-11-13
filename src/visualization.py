@@ -482,9 +482,11 @@ def topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, isl
         base, extent, coordinates = _load_static_base(mesh_path, config, scene_dir)
         # 原始米制栅格独立保存：放大查看不受绘图页边距/图例挤压影响。
         from PIL import Image
-        Image.fromarray(np.uint8(np.clip(base, 0, 1) * 255)).save(output_dir / "mesh_topdown_base.png")
-        (output_dir / "mesh_topdown_coordinates.json").write_text(
-            json.dumps(coordinates, ensure_ascii=False, indent=2), encoding="utf-8")
+        if output.get("mesh_topdown_base", True):
+            Image.fromarray(np.uint8(np.clip(base, 0, 1) * 255)).save(output_dir / "mesh_topdown_base.png")
+        if output.get("mesh_coordinates_json", True):
+            (output_dir / "mesh_topdown_coordinates.json").write_text(
+                json.dumps(coordinates, ensure_ascii=False, indent=2), encoding="utf-8")
         fig, ax = plt.subplots()
         ax.imshow(base, extent=extent, origin="upper", interpolation="nearest")
         for _, tri in island_triangles:
@@ -498,7 +500,9 @@ def topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, isl
         fig.tight_layout()
         _save_figure(fig, output_dir / "mesh_navmesh_topdown.png", config)
         # 局部图复用相同世界坐标映射，不裁切拉伸底图，方便检查窄柱和网格孔洞。
-        for index, region in enumerate(visual.get("detail_regions_xz", [])):
+        detail_regions = (visual.get("detail_regions_xz", [])
+                          if output.get("mesh_navmesh_details", True) else [])
+        for index, region in enumerate(detail_regions):
             x0, x1, z0, z1 = region
             fig, ax = plt.subplots()
             ax.imshow(base, extent=extent, origin="upper", interpolation="nearest")

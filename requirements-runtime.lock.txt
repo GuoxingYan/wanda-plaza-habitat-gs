@@ -10,6 +10,11 @@ imageio-ffmpeg==0.8.1
 kiwisolver==1.5.1
 llvmlite==0.50.0
 matplotlib==3.11.2
+mcap==1.6.0
+mcap-ros2-support==0.6.0
+protobuf==7.36.2
+lz4==4.4.5
+zstandard==0.25.0
 ninja==1.13.2
 numba==0.68.1
 numpy==2.3.5

@@ -105,6 +105,16 @@ camera:
   near_m: 0.05
   # 相机远裁剪平面（米），大于此距离的物体不渲染。
   far_m: 500.0
+  # 独立的深度显示预览；真实 /camera/depth 仍保留 32FC1 米制数据。
+  depth_preview:
+    # 开关；开启后 MCAP 增加 /camera/depth_preview 话题，便于 Foxglove 直接查看结构。
+    enabled: true
+    # 预览映射的最小距离（米）；此值及更近的点显示为黑色。
+    min_m: 0.0
+    # 预览映射的最大距离（米）；此值及更远的点显示为白色，建议按场景调整。
+    max_m: 20.0
+    # 预览消息编码；目前使用单通道 8 位灰度 mono8。
+    encoding: mono8
 
 output:
   # 是否写入导航 RGB MP4 视频。

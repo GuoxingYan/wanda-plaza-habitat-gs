@@ -104,22 +104,44 @@ camera:
   near_m: 0.05
   # 相机远裁剪平面（米），大于此距离的物体不渲染。
   far_m: 500.0
+  # 独立的深度显示预览；真实 /camera/depth 仍保留 32FC1 米制数据。
+  depth_preview:
+    # 开关；开启后 MCAP 增加 /camera/depth_preview 话题，便于 Foxglove 直接查看结构。
+    enabled: true
+    # 预览映射的最小距离（米）；此值及更近的点显示为黑色。
+    min_m: 0.0
+    # 预览映射的最大距离（米）；此值及更远的点显示为白色，建议按场景调整。
+    max_m: 20.0
+    # 预览消息编码；目前使用单通道 8 位灰度 mono8。
+    encoding: mono8
 
 output:
   # 是否写入导航 RGB MP4 视频。
   video: true
   # 是否写入包含起终点和所有逐帧相机位姿的 JSON 文件。
   poses_json: true
+  # 每条路线生成 MCAP，包含 RGB、Depth、CameraInfo、Pose 与轨迹级 Tag。
+  mcap: true
+  # 按新的存储规范不再额外写 path.npy 和 trajectory.npy。
+  numpy_trajectory_files: false
+  # 验证信息记录在 effective_config.yaml 和 MCAP 元数据中，不单独生成 validation.json。
+  validation_json: false
   # 是否写入 NavMesh、轨迹、起终点俯视图。
   trajectory_topdown: true
   # 是否写入彩色 mesh 顶视图与 NavMesh 的半透明叠加图。
   mesh_navmesh_overlay: true
-  # 是否生成真实 Habitat-GS 俯视渲染与逐顶点投影 NavMesh 叠加图；高分辨率额外渲染开销较大。
-  gaussian_navmesh_overlay: true
-  # 是否输出 cameras.json 轨迹密度过滤开启/关闭的并排对比图。
-  camera_trajectory_density_comparison: true
-  # 是否额外保存首帧、中间帧、末帧 RGB PNG。
-  rgb_keyframes: true
+  # 本次不重复输出高成本 Gaussian 俯视图。
+  gaussian_navmesh_overlay: false
+  # 本次不输出采集轨迹密度的开关对比图。
+  camera_trajectory_density_comparison: false
+  # RGB 帧统一保存在 MP4 和 MCAP 中，不额外拆成 PNG。
+  rgb_keyframes: false
+  # 保留原始 mesh 底图，方便独立查看与复用。
+  mesh_topdown_base: true
+  # 不再额外生成底图像素与世界坐标映射 JSON。
+  mesh_coordinates_json: false
+  # 不再额外生成局部 mesh/NavMesh 细节图。
+  mesh_navmesh_details: false
   # mesh 顶视颜色底图的最大输入顶点数；null 表示使用全部顶点。
   # 大场景可设为 2000000 降低内存，图像仍会按像素聚合而不是随机画碎点。
   topdown_max_points: null

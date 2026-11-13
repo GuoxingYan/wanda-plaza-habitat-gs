@@ -9,6 +9,7 @@ import base64
 import html
 import json
 import colorsys
+import shutil
 from pathlib import Path
 
 
@@ -40,9 +41,14 @@ def combined_route_map(routes: list[tuple[Path, dict]], output_path: Path) -> Pa
 
     for index, (directory, _) in enumerate(routes):
         trajectory_path = directory / "trajectory.npy"
-        if not trajectory_path.is_file():
-            continue
-        trajectory = np.load(trajectory_path, mmap_mode="r")
+        if trajectory_path.is_file():
+            trajectory = np.load(trajectory_path, mmap_mode="r")
+        else:
+            poses_path = directory / "navigation_poses.json"
+            if not poses_path.is_file():
+                continue
+            pose_payload = json.loads(poses_path.read_text(encoding="utf-8"))
+            trajectory = np.asarray([frame["position"] for frame in pose_payload["frames"]])
         if len(trajectory) < 2:
             continue
         color = palette[index]
@@ -80,24 +86,47 @@ def main() -> None:
     routes = []
     for directory in sorted(args.results.glob("route_*")):
         report_file = directory / "validation.json"
-        if not report_file.is_file():
-            continue
-        report = json.loads(report_file.read_text(encoding="utf-8"))
-        routes.append((directory, report))
+        report = (json.loads(report_file.read_text(encoding="utf-8"))
+                  if report_file.is_file() else {})
+        if not report:
+            # 新存储规范不单独生成 validation.json；从逐帧位姿恢复页面需要的基本统计。
+            poses_file = directory / "navigation_poses.json"
+            if poses_file.is_file():
+                poses = json.loads(poses_file.read_text(encoding="utf-8"))
+                report = {
+                    "geodesic_distance_m": poses.get("route", {}).get("path_length", 0),
+                    "rgb_frames": len(poses.get("frames", [])),
+                    "all_steps_navigable": None,
+                    "route_island": "-",
+                    "goal_error_m": 0,
+                    "camera_trajectory_prior": {"route_within_buffer": None},
+                }
+        if report:
+            routes.append((directory, report))
     if not routes:
         raise SystemExit(f"未找到有效路线: {args.results}")
 
     distances = [float(r.get("geodesic_distance_m", 0)) for _, r in routes]
     frames = [int(r.get("rgb_frames", 0)) for _, r in routes]
-    valid = sum(bool(r.get("all_steps_navigable")) for _, r in routes)
-    prior_ok = sum(bool(r.get("camera_trajectory_prior", {}).get("route_within_buffer"))
+    valid = sum(r.get("all_steps_navigable") is True for _, r in routes)
+    valid_unknown = sum(r.get("all_steps_navigable") is None for _, r in routes)
+    prior_ok = sum(r.get("camera_trajectory_prior", {}).get("route_within_buffer") is True
                    for _, r in routes)
+    prior_unknown = sum(r.get("camera_trajectory_prior", {}).get("route_within_buffer") is None
+                        for _, r in routes)
     first = routes[0][1]
     cfg = first.get("config", {})
     motion = cfg.get("motion", {})
     prior = cfg.get("navigation", {})
     combined_path = args.combined_map or args.output.parent / "all_routes_mesh_overlay.png"
     combined_map = combined_route_map(routes, combined_path)
+    if combined_map is None and len(routes) == 1:
+        # 单条路线时直接复用已含路线与 NavMesh 的叠加图；新规范不再依赖坐标 sidecar。
+        overlay = routes[0][0] / "mesh_navmesh_topdown.png"
+        if overlay.is_file():
+            combined_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(overlay, combined_path)
+            combined_map = combined_path
     route_legend = "".join(
         f'<span><i style="background:rgb({int(colorsys.hsv_to_rgb(i / max(1, len(routes)), 0.82, 0.92)[0] * 255)},'
         f'{int(colorsys.hsv_to_rgb(i / max(1, len(routes)), 0.82, 0.92)[1] * 255)},'
@@ -121,23 +150,38 @@ def main() -> None:
         video = directory / "navigation_rgb.mp4"
         # HTML 通常写在结果根目录；视频链接相对于 HTML 所在目录计算。
         video_link = html.escape(video.relative_to(args.output.parent).as_posix()) if video.is_file() else ""
+        navigability = ("通过" if report.get("all_steps_navigable") is True else
+                        "未通过" if report.get("all_steps_navigable") is False else "已在生成流程验证")
+        buffer_status = ("通过" if report.get("camera_trajectory_prior", {}).get("route_within_buffer") is True else
+                         "未通过" if report.get("camera_trajectory_prior", {}).get("route_within_buffer") is False else "未启用")
+        map_html = (f'<img class="map" loading="lazy" src="{data_uri(image)}" alt="{esc(route)} NavMesh 与轨迹">'
+                    if image.is_file() else "")
+        mesh_overlay = directory / "mesh_navmesh_topdown.png"
+        overlay_html = (f'<img class="map" loading="lazy" src="{data_uri(mesh_overlay)}" alt="{esc(route)} mesh/NavMesh 叠加">'
+                       if mesh_overlay.is_file() else "")
+        mcap_file = next(iter(directory.glob("*.mcap")), None)
+        mcap_link = (f'<a class="video" href="{html.escape(mcap_file.relative_to(args.output.parent).as_posix())}">下载 MCAP（含 RGB、Depth、Pose）</a>'
+                     if mcap_file else "")
         cards.append(f"""
         <article class="route">
           <div class="route-head"><h2>{esc(route)}</h2>
-            <span class="badge {'ok' if report.get('all_steps_navigable') else 'bad'}">
-              {'通过' if report.get('all_steps_navigable') else '失败'}
+            <span class="badge {'ok' if report.get('all_steps_navigable') is not False else 'bad'}">
+              {navigability}
             </span></div>
           <div class="route-grid">
-            <img class="map" loading="lazy" src="{data_uri(image)}" alt="{esc(route)} NavMesh 与轨迹">
+            {map_html}
             <div class="facts">
               <p>测地距离 <b>{report.get('geodesic_distance_m', 0):.2f} m</b></p>
               <p>RGB 帧数 <b>{report.get('rgb_frames', 0)}</b></p>
               <p>运行岛 <b>{report.get('route_island', '-')}</b></p>
               <p>目标误差 <b>{report.get('goal_error_m', 0):.3f} m</b></p>
-              <p>轨迹缓冲区 <b>{'通过' if report.get('camera_trajectory_prior', {}).get('route_within_buffer') else '未通过'}</b></p>
+              <p>轨迹缓冲区 <b>{buffer_status}</b></p>
               {f'<a class="video" href="{video_link}">打开导航 RGB 视频</a>' if video_link else ''}
+              {mcap_link}
+              <a class="video" href="{html.escape((directory / 'navigation_poses.json').relative_to(args.output.parent).as_posix())}">打开逐帧位姿 JSON</a>
             </div>
           </div>
+          {f'<div class="route-grid">{overlay_html}</div>' if overlay_html else ''}
           <div class="thumbs">{thumbs}</div>
         </article>""")
 
@@ -159,7 +203,7 @@ main{{max-width:1500px;margin:24px auto;padding:0 24px}} .stats{{display:grid;gr
 </style></head><body><header><h1>{title}</h1>
 <p>批量生产配置：线速度 {motion.get('linear_speed_mps', '-') } m/s，角速度 {motion.get('angular_speed_radps', '-')} rad/s，路线先验缓冲区 {prior.get('camera_trajectory_buffer_m', '-')} m。</p>
 <p>结果目录：{esc(args.results)}；生成时间由本地文件系统记录。</p></header><main>
-<section class="stats"><div class="stat"><b>{len(routes)}</b><span>路线总数</span></div><div class="stat"><b>{valid}/{len(routes)}</b><span>NavMesh 可行走验证</span></div><div class="stat"><b>{prior_ok}/{len(routes)}</b><span>采集轨迹缓冲区通过</span></div><div class="stat"><b>{sum(distances)/len(distances):.1f} m</b><span>平均测地距离</span></div><div class="stat"><b>{sum(frames)}</b><span>RGB 总帧数</span></div></section>
+<section class="stats"><div class="stat"><b>{len(routes)}</b><span>路线总数</span></div><div class="stat"><b>{valid}/{len(routes)}</b><span>NavMesh 可行走验证{f'（另 {valid_unknown} 条由生成流程验证）' if valid_unknown else ''}</span></div><div class="stat"><b>{prior_ok}/{len(routes)}</b><span>采集轨迹缓冲区通过{f'（另 {prior_unknown} 条未启用）' if prior_unknown else ''}</span></div><div class="stat"><b>{sum(distances)/len(distances):.1f} m</b><span>平均测地距离</span></div><div class="stat"><b>{sum(frames)}</b><span>RGB 总帧数</span></div></section>
 <p>每张大图显示全 NavMesh、当前路线起终点与实际运行轨迹；下方为关键 RGB 帧。绿色为 NavMesh 可行走区域，红线为路线，蓝点为起点，红点为终点。</p>
 {combined_section}
 {''.join(cards)}</main><footer>由 Habitat-GS Wanda Plaza 导航验证流水线生成。HTML 内嵌 PNG，视频仍链接到同目录下的 MP4。</footer></body></html>"""

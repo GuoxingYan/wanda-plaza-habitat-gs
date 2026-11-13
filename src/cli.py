@@ -14,7 +14,11 @@ import magnum as mn
 
 def required_route_outputs(output_config, navigation_config=None):
     """根据本次启用的输出类型返回续跑时必须存在的文件。"""
-    required = ["validation.json"]
+    required = ["validation.json"] if output_config.get("validation_json", True) else []
+    if output_config.get("poses_json", True):
+        required.append("navigation_poses.json")
+    if output_config.get("mcap", False):
+        required.append("*.mcap")
     for enabled, filename in (
         ("video", "navigation_rgb.mp4"),
         ("poses_json", "navigation_poses.json"),
@@ -34,9 +38,10 @@ def required_route_outputs(output_config, navigation_config=None):
 def is_route_complete(route_dir, report, config):
     """判断路线是否可续跑跳过，避免关闭视频时仍要求 RGB 帧统计。"""
     output_config = config["output"]
-    if report.get("config") != config:
+    if report.get("config") != config and not (Path(route_dir) / "effective_config.yaml").is_file():
         return False
-    if output_config.get("video", True) and report.get("rgb_frames", 0) <= 0:
+    if (output_config.get("validation_json", True)
+            and output_config.get("video", True) and report.get("rgb_frames", 0) <= 0):
         return False
     if output_config.get("poses_json", True):
         try:
@@ -54,8 +59,11 @@ def is_route_complete(route_dir, report, config):
                 return False
         except (OSError, ValueError, KeyError, TypeError):
             return False
-    return all((Path(route_dir) / name).is_file()
-               for name in required_route_outputs(output_config, config.get("navigation")))
+    required = required_route_outputs(output_config, config.get("navigation"))
+    if output_config.get("mcap", False):
+        required = [name for name in required if name != "*.mcap"]
+        required.append(f"trajectory_{Path(route_dir).name}.mcap")
+    return all((Path(route_dir) / name).is_file() for name in required)
 
 
 def effective_config_text(config_path, config):
@@ -125,6 +133,16 @@ def main():
     sensor.far = config['camera']['far_m']
     agent = hs.agent.AgentConfiguration()
     sensors = [sensor]
+    if config['output'].get('mcap', False):
+        depth_sensor = hs.CameraSensorSpec()
+        depth_sensor.uuid = 'depth'
+        depth_sensor.sensor_type = hs.SensorType.DEPTH
+        depth_sensor.resolution = [config['camera']['height'], config['camera']['width']]
+        depth_sensor.hfov = config['camera']['hfov_deg']
+        depth_sensor.position = mn.Vector3(0, config['motion']['camera_height_m'], 0)
+        depth_sensor.near = config['camera']['near_m']
+        depth_sensor.far = config['camera']['far_m']
+        sensors.append(depth_sensor)
     if config['output'].get('gaussian_navmesh_overlay', False) and not args.bake_only:
         import numpy as np
         # 使用 NavMesh 世界范围和最高点设置整批共用的高空俯视传感器。
@@ -278,3 +296,7 @@ def refresh_visualizations(args, config):
                                           (-0.5, width-0.5, -0.5, height-0.5),
                                           output_dir / 'gaussian_navmesh_topdown.png', route_config)
         print(f'Refreshed visualizations: {output_dir}', flush=True)
+
+
+if __name__ == '__main__':
+    main()

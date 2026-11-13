@@ -20,9 +20,11 @@ from src.visualization import (topdown_plots, save_gaussian_navmesh_overlay,
                             render_ground_sliced_gaussian_topdown)
 from src.avoidance import (add_render_obstacle, composite_obstacle_rgb,
                         plan_around_synthetic_obstacle)
+from src.mcap_output import NavigationMcapWriter, sanitize_depth
 
 
 def run_one(args, config, render_sim=None):
+    """执行单条路线的规划、RGB/Depth 渲染、MCAP 写入和验证。"""
     scene_dir = args.scene_dir or resolve_path(config["scene"]["directory"])
     output_dir = args.output
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -114,8 +116,9 @@ def run_one(args, config, render_sim=None):
             np.asarray([frame[0] for frame in frames]), camera_prior,
             config["navigation"].get("camera_trajectory_buffer_m", 0.0)):
         raise RuntimeError("实际 NavMesh 移动轨迹离开 cameras.json 采集轨迹缓冲区")
-    np.save(output_dir / "path.npy", points)
-    np.save(output_dir / "trajectory.npy", np.asarray([frame[0] for frame in frames]))
+    if config["output"].get("numpy_trajectory_files", True):
+        np.save(output_dir / "path.npy", points)
+        np.save(output_dir / "trajectory.npy", np.asarray([frame[0] for frame in frames]))
     report.update(navmesh=str(navmesh_path.resolve()), navigable_area_m2=float(pathfinder.navigable_area),
                   num_islands=int(pathfinder.num_islands), largest_island=largest_island, route_island=island,
                   largest_island_area_m2=float(pathfinder.island_area(largest_island)),
@@ -151,7 +154,9 @@ def run_one(args, config, render_sim=None):
                              else "configured_or_navmesh_sample"),
     }
     report["camera_trajectory_density_filter"] = density_report
-    topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, island, obstacle)
+    if (config["output"].get("trajectory_topdown", True)
+            or config["output"].get("mesh_navmesh_overlay", True)):
+        topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, island, obstacle)
 
     if config["output"].get("gaussian_navmesh_overlay", False) and not args.bake_only:
         import matplotlib
@@ -188,7 +193,17 @@ def run_one(args, config, render_sim=None):
         sensor.resolution = [camera["height"], camera["width"]]; sensor.hfov = camera["hfov_deg"]
         sensor.position = mn.Vector3(0, config["motion"]["camera_height_m"], 0)
         sensor.near, sensor.far = camera["near_m"], camera["far_m"]
-        agent = hs.agent.AgentConfiguration(); agent.sensor_specifications = [sensor]
+        sensors = [sensor]
+        if config["output"].get("mcap", False):
+            depth_sensor = hs.CameraSensorSpec()
+            depth_sensor.uuid = "depth"
+            depth_sensor.sensor_type = hs.SensorType.DEPTH
+            depth_sensor.resolution = [camera["height"], camera["width"]]
+            depth_sensor.hfov = camera["hfov_deg"]
+            depth_sensor.position = mn.Vector3(0, config["motion"]["camera_height_m"], 0)
+            depth_sensor.near, depth_sensor.far = camera["near_m"], camera["far_m"]
+            sensors.append(depth_sensor)
+        agent = hs.agent.AgentConfiguration(); agent.sensor_specifications = sensors
         render_times, image_stds, frame_records = [], [], []
         video_path = output_dir / "navigation_rgb.mp4"
         if render_sim is None:
@@ -209,12 +224,31 @@ def run_one(args, config, render_sim=None):
                 obstacle["closest_approach_frame_index"] = closest_frame
             writer_context = (imageio.get_writer(str(video_path), fps=config["motion"]["fps"], macro_block_size=2)
                               if config["output"]["video"] else None)
+            camera_info = {
+                "width": int(camera["width"]), "height": int(camera["height"]),
+                "fx": camera["width"] / (2 * math.tan(math.radians(camera["hfov_deg"]) / 2)),
+                "fy": camera["width"] / (2 * math.tan(math.radians(camera["hfov_deg"]) / 2)),
+                "cx": (camera["width"] - 1) / 2, "cy": (camera["height"] - 1) / 2,
+            }
+            mcap_writer = None
+            if config["output"].get("mcap", False):
+                mcap_writer = NavigationMcapWriter(
+                    output_dir / f"trajectory_{output_dir.name}.mcap", output_dir.name,
+                    camera_info, metadata={
+                        "route_length_m": float(path.geodesic_distance),
+                        "camera_height_m": float(config["motion"]["camera_height_m"]),
+                        "linear_speed_mps": float(config["motion"]["linear_speed_mps"]),
+                        "angular_speed_radps": float(config["motion"]["angular_speed_radps"]),
+                        "depth_far_clip_m": float(camera["far_m"]),
+                        "depth_preview": config["camera"].get("depth_preview", {}),
+                    })
             try:
                 for index, (position, yaw, timestamp) in enumerate(frames):
                     state = hs.AgentState(); state.position = mn.Vector3(*position.tolist()); state.rotation = yaw_quaternion(yaw)
                     sim.initialize_agent(0, state)
                     render_start = time.perf_counter()
-                    rgb = sim.get_sensor_observations()["rgb"][:, :, :3]
+                    observations = sim.get_sensor_observations()
+                    rgb = observations["rgb"][:, :, :3]
                     rgb = composite_obstacle_rgb(
                         rgb, obstacle,
                         position + np.array([0, config["motion"]["camera_height_m"], 0]),
@@ -229,11 +263,22 @@ def run_one(args, config, render_sim=None):
                     frame_records.append({"frame_index": index, "timestamp_s": float(timestamp),
                                           "position": [float(x) for x in camera_position],
                                           "xyzw": quaternion_xyzw(state.rotation)})
+                    if mcap_writer is not None:
+                        depth = np.asarray(observations["depth"], dtype=np.float32)
+                        if depth.ndim == 3:
+                            depth = depth[..., 0]
+                        # 以相机远裁剪距离填补空洞，并钳制远裁剪面外值。
+                        depth = sanitize_depth(depth, camera["far_m"])
+                        stamp_ns = mcap_writer.timestamp_ns(timestamp)
+                        mcap_writer.add_frame(stamp_ns, rgb, depth,
+                                              camera_position, frame_records[-1]["xyzw"], index)
                     if index % 100 == 0:
                         print(f"Rendered {index}/{len(frames)} frames", flush=True)
             finally:
                 if writer_context:
                     writer_context.close()
+                if mcap_writer is not None:
+                    mcap_writer.finish()
                 if render_obstacle is not None:
                     obstacle_object, obstacle_mesh = render_obstacle
                     sim.get_rigid_object_manager().remove_object_by_id(obstacle_object.object_id)
@@ -251,7 +296,7 @@ def run_one(args, config, render_sim=None):
                               "cx": (camera["width"] - 1) / 2, "cy": (camera["height"] - 1) / 2,
                               "height_m": config["motion"]["camera_height_m"],
                               "note": "标称 RGB FoV 的针孔近似，无畸变，不是逐机标定内参"})
-        if config["output"]["poses_json"]:
+        if config["output"].get("poses_json", True):
             pose_data = {
                 "coordinate_frame": {
                     "name": "Y-up",
@@ -282,7 +327,8 @@ def run_one(args, config, render_sim=None):
     preparation_file = scene_dir / "preparation.json"
     if preparation_file.exists():
         report["preparation"] = json.loads(preparation_file.read_text(encoding="utf-8"))
-    (output_dir / "validation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    if config["output"].get("validation_json", True):
+        (output_dir / "validation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
 
 
