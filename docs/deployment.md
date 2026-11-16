@@ -39,10 +39,11 @@ mesh 和 Gaussian 使用同一源坐标包围盒；mesh 三角形仅在三个顶
 - NavMesh 由 Recast/Habitat 从碰撞 mesh 烘焙；配置包含 cell size/height、代理宽度和高度、最大爬升及最大坡度。
 - 起点和终点默认从 `cameras.json` 轨迹位置吸附到可行走面后选取；规划路径可要求保持在采集轨迹缓冲区内。
 - 可按 NavMesh 连通岛上的采集轨迹密度过滤稀疏区域。该过滤仅影响候选区域，不会修改 NavMesh 文件。
-- 路径由 Habitat PathFinder 求测地路线。运动阶段采用差速底盘近似，线速度、角速度、加减速度由 YAML 控制，转弯处停车后原地旋转。
-- 该运动模型不表达汽车式最小转弯半径，也不含 SLAM、视觉策略和真实控制器。
+- `motion.generation_profile: rich` 会在 Habitat PathFinder/NavMesh 上组合弧线掉头、S 型转向、弧线切向运动和盲端倒车等动作，并按批次种子确定动作组合。
+- 正向运动段连接默认以 `motion.actions.tangent_connector_probability: 0.35` 的概率尝试切向连接。只有候选曲线同时通过 NavMesh 连通性、采集轨迹缓冲和最小转弯半径检查时才采用，并与相邻正向段合并做一次速度规划；失败时回退到普通平滑连接及必要的差速原地转向。此行为用于增加连续曲线运动样本，不保证每个拐角都切向连续。
+- 速度、角速度、加减速度及横向加速度受 YAML 配置限制。`motion.generation_profile: legacy` 可切换回旧运动生成方式；差速模型不代表真实控制器，也不包含 SLAM 或视觉策略。
 
-所有主要参数在 `configs/*.yaml`，并带中文注释。常用项包括 `navmesh.agent_width_m`、`navmesh.max_slope_deg`、`motion.linear_speed_mps`、`motion.angular_speed_radps`、相机参数、采集轨迹开关/缓冲区、生成条数和可视化尺寸。
+丰富运动参数在 `configs/*.yaml`，并带中文注释。常用项包括 `motion.minimum_turn_radius_m`、`motion.max_lateral_acceleration_mps2`、`motion.actions.curve_radius_m`、`motion.actions.tangent_connector_probability`、动作组合模式及重采样次数，以及 NavMesh 和采集轨迹缓冲设置。
 
 ## 输出文件
 

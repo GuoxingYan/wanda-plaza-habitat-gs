@@ -10,9 +10,9 @@ import magnum as mn
 import numpy as np
 from PIL import Image
 
-from src.planning import (build_motion, camera_trajectory_island_stats, choose_route, load_camera_trajectory,
+from src.planning import (camera_trajectory_island_stats, choose_route, load_camera_trajectory,
                        navmesh_agent_radius,
-                       quaternion_xyzw, resolve_path, route_within_camera_buffer,
+                       build_rich_motion, quaternion_xyzw, resolve_path, route_within_camera_buffer,
                        yaw_quaternion)
 from src.visualization import (topdown_plots, save_gaussian_navmesh_overlay,
                             save_camera_density_comparison,
@@ -21,6 +21,7 @@ from src.visualization import (topdown_plots, save_gaussian_navmesh_overlay,
 from src.avoidance import (add_render_obstacle, composite_obstacle_rgb,
                         plan_around_synthetic_obstacle)
 from src.mcap_output import NavigationMcapWriter, sanitize_depth
+from src.motion_primitives import classify_trajectory_tags
 
 
 def run_one(args, config, render_sim=None):
@@ -57,10 +58,29 @@ def run_one(args, config, render_sim=None):
     pathfinder.seed(config["navigation"]["seed"])
     assert pathfinder.navigable_area > 10
     largest_island = int(np.argmax([pathfinder.island_area(i) for i in range(pathfinder.num_islands)]))
-    path, island = choose_route(pathfinder, config, navmesh_path=navmesh_path)
-    original_points = np.asarray(path.points, dtype=np.float32)
-    points, obstacle = plan_around_synthetic_obstacle(pathfinder, original_points, config)
-    frames = build_motion(pathfinder, points, config)
+    generation_profile = config["motion"].get("generation_profile", "rich")
+    motion_diagnostics = None
+    if generation_profile == "rich":
+        batch_index = int(config["generation"].get("batch_index", 0))
+        batch_size = int(config["generation"].get("batch_size", 1))
+        points, island, frames, motion_diagnostics = build_rich_motion(
+            pathfinder, config, batch_index, batch_size)
+        requested = hs.ShortestPath()
+        requested.requested_start = points[0]
+        requested.requested_end = points[-1]
+        if not pathfinder.find_path(requested):
+            raise RuntimeError("丰富运动轨迹端点之间无法计算 NavMesh 测地距离")
+        path = requested
+        original_points = points
+        obstacle = None
+    else:
+        path, island = choose_route(pathfinder, config, navmesh_path=navmesh_path)
+        original_points = np.asarray(path.points, dtype=np.float32)
+        points, obstacle = plan_around_synthetic_obstacle(pathfinder, original_points, config)
+        frames = build_motion(pathfinder, points, config)
+    trajectory_tags = classify_trajectory_tags(
+        frames, (motion_diagnostics or {}).get("motion_events"),
+        config["navmesh"].get("elevation_change_threshold_m", 0.15))
     if obstacle and obstacle.get("triggered"):
         actual_positions = np.asarray([frame[0] for frame in frames], dtype=np.float64)
         obstacle_xz = np.asarray(obstacle["center"], dtype=np.float64)[[0, 2]]
@@ -137,6 +157,13 @@ def run_one(args, config, render_sim=None):
                   navigation_steps=len(frames) - 1, goal_error_m=float(np.linalg.norm(frames[-1][0] - points[-1])),
                   all_steps_navigable=all(pathfinder.is_navigable(frame[0].astype(np.float32), 0.15) for frame in frames))
     report["synthetic_obstacle"] = obstacle
+    report["motion_generation"] = motion_diagnostics or {
+        "generation_profile": "legacy",
+        "cumulative_distance_m": float(sum(
+            np.linalg.norm(frames[index][0] - frames[index - 1][0])
+            for index in range(1, len(frames)))),
+    }
+    report["tags"] = trajectory_tags
     report["camera_trajectory_prior"] = {
         "enabled": camera_prior is not None,
         "source_file": camera_prior["source_file"] if camera_prior else None,
@@ -303,6 +330,7 @@ def run_one(args, config, render_sim=None):
                     "position_unit": "m",
                     "orientation_format": "xyzw",
                 },
+                "tags": trajectory_tags,
                 "route": {
                     "route_id": output_dir.name,
                     "seed": int(config["navigation"]["seed"]),
@@ -310,7 +338,8 @@ def run_one(args, config, render_sim=None):
                               "xyzw": frame_records[0]["xyzw"]},
                     "goal": {"position": frame_records[-1]["position"],
                              "xyzw": frame_records[-1]["xyzw"]},
-                    "path_length": float(path.geodesic_distance),
+                    "path_length": float((motion_diagnostics or {}).get(
+                        "cumulative_distance_m", path.geodesic_distance)),
                 },
                 "camera": {
                     "model": "D435 RGB nominal pinhole",

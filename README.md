@@ -1,6 +1,6 @@
 # Wanda Plaza Habitat-GS 导航
 
-室外场景导航数据生成与验证工具：从带颜色的 mesh 生成 NavMesh，结合 `cameras.json` 采集轨迹先验规划路线，按运动学约束生成 D435 视角的 Gaussian RGB 视频、位姿 JSON 和诊断图。
+室外场景导航数据生成与验证工具：从带颜色的 mesh 生成 NavMesh，结合 `cameras.json` 采集轨迹先验规划路线，并按运动学约束生成 D435 视角的 Gaussian RGB 视频、位姿 JSON、MCAP 和诊断图。丰富运动模式支持弧线掉头、S 弯、切向弧线及盲端倒车；正向段连接会尝试切向连续运动，候选不满足 NavMesh 或轨迹缓冲约束时回退到常规连接。
 
 ## 快速开始
 
@@ -15,6 +15,9 @@ python scripts/prepare_scene.py --out data/scene_crop
 
 # 使用默认配置生成一条路线并验证
 bash scripts/run_validation.sh --config configs/default.yaml --single
+
+# 生成 50 条全密度丰富运动路线
+bash scripts/run_validation.sh --config configs/fullres-50.yaml --count 50 --skip-bake
 
 # 全密度 50 条批量生成与 HTML 汇总（需先准备 data/scene_fullres）
 bash scripts/run_fullres_50.sh
@@ -43,6 +46,10 @@ Python 源码按你的目录要求直接放在 `src/`，没有额外的 `src/wan
 ## 输入与坐标
 
 原始数据不进入 Git。`scripts/prepare_scene.py` 对 mesh 和 Gaussian PLY 使用相同裁剪范围，并将源 Z-up 坐标 `(x,y,z)` 转为 Habitat Y-up `(x,z,-y)`。更多参数、验证产物、运动模型及已知限制见 [完整使用说明](docs/deployment.md)。图像颜色、叠加图和坐标轴含义见 [可视化说明](docs/visualization.md)。
+
+## 运动生成
+
+`motion.generation_profile: rich` 使用可复现的批次动作排程生成弧线掉头、S 型转向、弧线切向运动和盲端倒车，并在 NavMesh 与 `cameras.json` 缓冲区内验证路线。正向运动段之间默认以 `motion.actions.tangent_connector_probability: 0.35` 的概率尝试匹配端点切线；连接候选通过 NavMesh、轨迹先验和最小转弯半径检查后，会合并做统一速度规划。候选不可行时保留常规平滑连接及原有朝向调整行为，因此不保证每个拐角均连续转向。设为 `legacy` 可恢复旧路线运动模式。相关参数见 `configs/default.yaml`、`configs/fullres-5.yaml` 和 `configs/fullres-50.yaml`。
 
 当前本地全密度 50 条结果汇总（如果已生成）：[HTML 汇总](outputs/results_fullres/batch_20261109_50/summary.html)。该路径属于本地输出，不会随仓库发布。
 

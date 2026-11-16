@@ -174,6 +174,9 @@ def main():
     for index in range(count):
         current = copy.deepcopy(config)
         current['navigation']['seed'] += index
+        current['generation']['batch_seed'] = int(config['navigation']['seed'])
+        current['generation']['batch_size'] = int(count)
+        current['generation']['batch_index'] = int(index)
         run_args = copy.copy(args)
         run_args.output = args.output / f'route_{index:04d}'
         # 批次使用同一份已验证 NavMesh；外部预先烘焙可避免反复初始化模拟器。

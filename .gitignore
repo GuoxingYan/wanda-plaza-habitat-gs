@@ -1,6 +1,7 @@
 # 原始输入、场景资产、缓存、运行输出与第三方源码不提交
 data/
 outputs/
+.scratch/
 third_party/habitat-gs/
 habitat-gs/
 
