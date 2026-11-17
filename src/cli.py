@@ -215,7 +215,7 @@ def main():
 
 
 def refresh_visualizations(args, config):
-    """基于已有 route_*/path.npy 刷新高分辨率可视化。"""
+    """基于已有路径数组或逐帧位姿 JSON 刷新高分辨率可视化。"""
     import numpy as np
     import matplotlib
     matplotlib.use('Agg')
@@ -250,17 +250,42 @@ def refresh_visualizations(args, config):
             continue
         path_file = output_dir / 'path.npy'
         trajectory_file = output_dir / 'trajectory.npy'
-        if not path_file.exists() or not trajectory_file.exists():
-            continue
-        path = np.load(path_file)
-        trajectory = np.load(trajectory_file)
+        if path_file.exists() and trajectory_file.exists():
+            path = np.load(path_file)
+            trajectory = np.load(trajectory_file)
+            frames = [(point, 0.0, index / config['motion']['fps'])
+                      for index, point in enumerate(trajectory)]
+        else:
+            poses_file = output_dir / 'navigation_poses.json'
+            if not poses_file.is_file():
+                continue
+            pose_data = json.loads(poses_file.read_text(encoding='utf-8'))
+            positions = np.asarray([frame['position'] for frame in pose_data['frames']],
+                                   dtype=np.float64)
+            if len(positions) < 2:
+                continue
+            path = positions
+            frames = []
+            for index, frame in enumerate(pose_data['frames']):
+                x, y, z, w = frame['xyzw']
+                yaw = float(np.arctan2(2 * (w * y + x * z),
+                                       1 - 2 * (y * y + z * z)))
+                frames.append((positions[index], yaw,
+                               float(frame.get('timestamp_s', index / config['motion']['fps']))))
         route_config = config
         config_path = output_dir / 'effective_config.yaml'
         if config_path.exists():
             with config_path.open(encoding='utf-8') as stream:
                 route_config = yaml.safe_load(stream)
-        frames = [(point, 0.0, index / config['motion']['fps']) for index, point in enumerate(trajectory)]
-        island = int(pathfinder.get_island(path[0]))
+            # 刷新模式由本次命令选择要生成的可视化项，不被历史运行快照中的关闭状态屏蔽。
+            for key in ('trajectory_topdown', 'mesh_navmesh_overlay',
+                        'gaussian_navmesh_overlay', 'mesh_topdown_base',
+                        'mesh_coordinates_json', 'mesh_navmesh_details'):
+                if config['output'].get(key, False):
+                    route_config['output'][key] = True
+            route_config['visualization'] = config.get('visualization',
+                                                        route_config['visualization'])
+        island = int(pathfinder.get_island(np.asarray(path[0], dtype=np.float32)))
         topdown_plots(pathfinder, path, frames, scene_dir, output_dir, route_config, island)
 
         if route_config['output'].get('gaussian_navmesh_overlay', False):

@@ -4,11 +4,12 @@
 
 ## 常见图片
 
-- `trajectory_topdown.png`：NavMesh 连通区域、执行轨迹、起点和终点。若开启避障实验，也显示障碍物 footprint。
+- `trajectory_topdown.png`：NavMesh 连通区域、执行轨迹、抽样车头朝向、起点和终点。明显拐弯处会额外补一个同样式的稍长箭头；箭头从逐帧姿态四元数计算，倒车时仍表示车头方向。若开启避障实验，也显示障碍物 footprint。
 - `mesh_navmesh_topdown.png`：mesh 顶点颜色按米制网格聚合形成底图，叠加 NavMesh 可行走面。
 - `camera_trajectory_density_comparison.png`：采集轨迹密度过滤关闭/开启后的可行区域，并单独展示 cameras.json 轨迹。浅红色表示被密度条件过滤的候选岛。
 - `gaussian_topdown_raw.png` 与 `gaussian_navmesh_topdown.png`：可选的 Habitat-GS 俯视渲染及投影叠图。大场景开销较高，且高空 Gaussian 可能出现拉丝，不应单独作为精确障碍判据。
 - `rgb_*.png` 和 `navigation_rgb.mp4`：D435 参数的地面视角 Gaussian 渲染。
+- `summary.html` 与 `all_routes_mesh_overlay.png`：批次汇总报告及彩色 mesh 纹理底图上的路线叠加图。每条路线使用独立颜色，箭头为按路程抽样的车头朝向，显著拐弯处额外加箭；蓝色圆点为起点，橙色三角为终点，不叠加 NavMesh。
 
 ## 坐标约定
 

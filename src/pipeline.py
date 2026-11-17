@@ -12,7 +12,7 @@ from PIL import Image
 
 from src.planning import (camera_trajectory_island_stats, choose_route, load_camera_trajectory,
                        navmesh_agent_radius,
-                       build_rich_motion, quaternion_xyzw, resolve_path, route_within_camera_buffer,
+                       build_motion, build_rich_motion, quaternion_xyzw, resolve_path, route_within_camera_buffer,
                        yaw_quaternion)
 from src.visualization import (topdown_plots, save_gaussian_navmesh_overlay,
                             save_camera_density_comparison,
@@ -20,7 +20,7 @@ from src.visualization import (topdown_plots, save_gaussian_navmesh_overlay,
                             render_ground_sliced_gaussian_topdown)
 from src.avoidance import (add_render_obstacle, composite_obstacle_rgb,
                         plan_around_synthetic_obstacle)
-from src.mcap_output import NavigationMcapWriter, sanitize_depth
+from src.mcap_output import NavigationMcapWriter, depth_preview, sanitize_depth
 from src.motion_primitives import classify_trajectory_tags
 
 
@@ -268,7 +268,7 @@ def run_one(args, config, render_sim=None):
                         "angular_speed_radps": float(config["motion"]["angular_speed_radps"]),
                         "depth_far_clip_m": float(camera["far_m"]),
                         "depth_preview": config["camera"].get("depth_preview", {}),
-                    })
+                    }, tags=trajectory_tags)
             try:
                 for index, (position, yaw, timestamp) in enumerate(frames):
                     state = hs.AgentState(); state.position = mn.Vector3(*position.tolist()); state.rotation = yaw_quaternion(yaw)
@@ -284,7 +284,7 @@ def run_one(args, config, render_sim=None):
                     image_stds.append(float(rgb.std()))
                     if writer_context:
                         writer_context.append_data(rgb)
-                    if config["output"]["rgb_keyframes"] and index in keyframe_indices:
+                    if config["output"].get("rgb_keyframes", False) and index in keyframe_indices:
                         Image.fromarray(rgb).save(output_dir / f"rgb_{index:04d}.png")
                     camera_position = position + np.array([0, config["motion"]["camera_height_m"], 0])
                     frame_records.append({"frame_index": index, "timestamp_s": float(timestamp),
@@ -296,6 +296,16 @@ def run_one(args, config, render_sim=None):
                             depth = depth[..., 0]
                         # 以相机远裁剪距离填补空洞，并钳制远裁剪面外值。
                         depth = sanitize_depth(depth, camera["far_m"])
+                        if (config["output"].get("depth_keyframes", False)
+                                and index == 0):
+                            preview_config = camera.get("depth_preview", {})
+                            depth_image = depth_preview(
+                                depth,
+                                preview_config.get("min_m", 0.0),
+                                preview_config.get("max_m", 20.0),
+                                preview_config.get("encoding", "mono8"))
+                            Image.fromarray(depth_image).save(
+                                output_dir / "depth_0000.png")
                         stamp_ns = mcap_writer.timestamp_ns(timestamp)
                         mcap_writer.add_frame(stamp_ns, rgb, depth,
                                               camera_position, frame_records[-1]["xyzw"], index)

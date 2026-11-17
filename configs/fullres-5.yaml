@@ -113,9 +113,9 @@ avoidance:
 
 camera:
   # D435 RGB 传感器图像宽度（像素）。
-  width: 1280
+  width: 640
   # D435 RGB 传感器图像高度（像素）。
-  height: 720
+  height: 360
   # D435 RGB 标称水平视场角；这是理想针孔近似值，不替代逐机标定。
   hfov_deg: 69.0
   # 相机近裁剪平面（米），小于此距离的物体不渲染。
@@ -154,6 +154,8 @@ output:
   camera_trajectory_density_comparison: false
   # RGB 帧统一保存在 MP4 和 MCAP 中，不额外拆成 PNG。
   rgb_keyframes: false
+  # MCAP 开启时额外保存首帧深度预览 PNG（8 位灰度）。
+  depth_keyframes: true
   # 保留原始 mesh 底图，方便独立查看与复用。
   mesh_topdown_base: true
   # 不再额外生成底图像素与世界坐标映射 JSON。

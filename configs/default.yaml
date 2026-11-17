@@ -144,6 +144,8 @@ output:
   camera_trajectory_density_comparison: true
   # 是否额外保存首帧、中间帧、末帧 RGB PNG。
   rgb_keyframes: true
+  # MCAP 开启时是否额外保存首帧深度预览 PNG（8 位灰度，仅供查看，不替代米制原始深度）。
+  depth_keyframes: true
   # mesh 顶视颜色底图的最大输入顶点数；null 表示使用全部顶点。
   # 大场景可设为 2000000 降低内存，图像仍会按像素聚合而不是随机画碎点。
   topdown_max_points: null

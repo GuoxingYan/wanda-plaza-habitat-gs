@@ -1,4 +1,4 @@
-# 使用与运行说明
+`# 使用与运行说明
 
 项目在 Wanda Plaza 室外场景上构建 NavMesh、筛选并规划路线，使用 Habitat-GS 输出 D435 RGB 视频、位姿 JSON 和诊断可视化。原始数据与大体积产物均保留在本地忽略目录。
 
@@ -51,7 +51,8 @@ mesh 和 Gaussian 使用同一源坐标包围盒；mesh 三角形仅在三个顶
 
 - `validation.json`：生效配置摘要、NavMesh/路径统计、逐帧验证结果。
 - `navigation_poses.json`：起终点及每帧相机 `position` 和 `xyzw` 四元数，不记录 agent 字段。
-- `trajectory_<route_id>.mcap`：ROS 2 CDR 编码的 RGB、米制 `32FC1` Depth、CameraInfo、PoseStamped，以及默认 `straight_forward` 轨迹标签。
+- `trajectory_<route_id>.mcap`：ROS 2 CDR 编码的 RGB、米制 `32FC1` Depth、CameraInfo、PoseStamped，以及根据实际轨迹运动分类写入的轨迹标签；标签定义见 [README](../README.md#轨迹标签)。
+- `depth_0000.png`：可选的首帧深度灰度预览；映射范围由 `camera.depth_preview` 控制，仅供查看，原始米制深度仍在 MCAP 中。
 - `navigation_rgb.mp4`、`rgb_*.png`：全密度 Gaussian 的相机视角渲染。
 - `trajectory_topdown.png`：NavMesh、轨迹、起终点与障碍标记。
 - `mesh_navmesh_topdown.png`：彩色 mesh 顶视聚合与 NavMesh 叠图。

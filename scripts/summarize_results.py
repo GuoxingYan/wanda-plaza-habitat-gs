@@ -10,7 +10,13 @@ import html
 import json
 import colorsys
 import shutil
+import sys
 from pathlib import Path
+import yaml
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def combined_route_map(routes: list[tuple[Path, dict]], output_path: Path) -> Path | None:
@@ -23,12 +29,30 @@ def combined_route_map(routes: list[tuple[Path, dict]], output_path: Path) -> Pa
     first_dir = routes[0][0]
     base_path = first_dir / "mesh_topdown_base.png"
     coordinates_path = first_dir / "mesh_topdown_coordinates.json"
-    if not base_path.is_file() or not coordinates_path.is_file():
-        return None
-    image = Image.open(base_path).convert("RGB")
+    if base_path.is_file() and coordinates_path.is_file():
+        image = Image.open(base_path).convert("RGB")
+        coordinates = json.loads(coordinates_path.read_text(encoding="utf-8"))
+        extent = coordinates["extent_xmin_xmax_zmin_zmax"]
+    else:
+        config_path = first_dir / "effective_config.yaml"
+        if not config_path.is_file():
+            return None
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        stage_path = Path(config["scene"]["directory"]) / "wanda.stage_config.json"
+        if not stage_path.is_absolute():
+            stage_path = Path(__file__).resolve().parents[1] / stage_path
+        if not stage_path.is_file():
+            return None
+        stage = json.loads(stage_path.read_text(encoding="utf-8"))
+        mesh_path = Path(stage["collision_asset"])
+        if not mesh_path.is_absolute():
+            mesh_path = stage_path.parent / mesh_path
+        from src.visualization import _load_static_base
+        base, extent, _ = _load_static_base(
+            mesh_path, config, Path(config["scene"]["directory"]))
+        image = Image.fromarray(np.uint8(np.clip(base, 0, 1) * 255), mode="RGB")
     draw = ImageDraw.Draw(image, "RGBA")
-    coordinates = json.loads(coordinates_path.read_text(encoding="utf-8"))
-    xmin, xmax, zmin, zmax = coordinates["extent_xmin_xmax_zmin_zmax"]
+    xmin, xmax, zmin, zmax = extent
     width, height = image.size
     palette = [tuple(int(channel * 255) for channel in
                      colorsys.hsv_to_rgb(i / max(1, len(routes)), 0.82, 0.92))
@@ -41,6 +65,7 @@ def combined_route_map(routes: list[tuple[Path, dict]], output_path: Path) -> Pa
 
     for index, (directory, _) in enumerate(routes):
         trajectory_path = directory / "trajectory.npy"
+        pose_payload = None
         if trajectory_path.is_file():
             trajectory = np.load(trajectory_path, mmap_mode="r")
         else:
@@ -56,6 +81,96 @@ def combined_route_map(routes: list[tuple[Path, dict]], output_path: Path) -> Pa
         points = [pixel(point) for point in trajectory]
         draw.line(points, fill=(255, 255, 255, 225), width=9, joint="curve")
         draw.line(points, fill=(*color, 235), width=5, joint="curve")
+        if pose_payload is None:
+            poses_path = directory / "navigation_poses.json"
+            if poses_path.is_file():
+                pose_payload = json.loads(poses_path.read_text(encoding="utf-8"))
+        if pose_payload and pose_payload.get("frames"):
+            frames = pose_payload["frames"]
+            frame_positions = np.asarray([frame["position"] for frame in frames],
+                                         dtype=np.float64)
+            cumulative = np.concatenate((
+                [0.0], np.cumsum(np.linalg.norm(
+                    np.diff(frame_positions[:, [0, 2]], axis=0), axis=1))))
+            route_distance = float(cumulative[-1])
+            sample_count = min(9, max(2, int(route_distance // 8.0)))
+            targets = np.linspace(route_distance * 0.08,
+                                  route_distance * 0.92, sample_count)
+            sample_indices = np.unique(np.searchsorted(cumulative, targets).clip(
+                0, len(frames) - 1))
+            # 在航向持续变化的区段内补充转弯中段和结束处的箭头。
+            quaternions = np.asarray([frame["xyzw"] for frame in frames],
+                                     dtype=np.float64)
+            xq, yq, zq, wq = quaternions.T
+            yaw = np.unwrap(np.arctan2(2 * (wq * yq + xq * zq),
+                                      1 - 2 * (yq * yq + zq * zq)))
+            window = max(2, int(round(0.5 * 10)))
+            turn_mask = np.zeros(len(frames), dtype=bool)
+            for frame_index in range(window, len(frames) - window):
+                delta_yaw = float(yaw[frame_index + window]
+                                  - yaw[frame_index - window])
+                turn_mask[frame_index] = abs(delta_yaw) >= np.deg2rad(20)
+            turn_indices = np.flatnonzero(turn_mask)
+            turn_runs = []
+            if len(turn_indices):
+                run_start = previous = int(turn_indices[0])
+                for frame_index in turn_indices[1:]:
+                    frame_index = int(frame_index)
+                    if frame_index - previous > 15:
+                        turn_runs.append((run_start, previous))
+                        run_start = frame_index
+                    previous = frame_index
+                turn_runs.append((run_start, previous))
+            turn_sample_indices = set()
+            for run_start, run_end in turn_runs:
+                net_turn = abs(float(yaw[run_end + window]
+                                    - yaw[run_start - window]))
+                if net_turn < np.deg2rad(25):
+                    continue
+                turn_sample_indices.add((run_start + run_end) // 2)
+            sample_indices = np.asarray(sorted(set(sample_indices.tolist())
+                                               | turn_sample_indices), dtype=int)
+            regular_arrow_length = max(28, min(42, round(min(width, height) * 0.006)))
+            for frame_index in sample_indices:
+                frame = frames[int(frame_index)]
+                x, y, z, w = frame["xyzw"]
+                # Habitat 代理局部前向为 -Z；四元数旋转后投影到世界 X/Z 平面。
+                forward_x = -2.0 * (x * z + w * y)
+                forward_z = -(1.0 - 2.0 * (x * x + y * y))
+                norm = float(np.hypot(forward_x, forward_z))
+                if norm < 1e-8:
+                    continue
+                px, py = points[int(frame_index)]
+                arrow_length = (44 if int(frame_index) in turn_sample_indices
+                                else regular_arrow_length)
+                unit = np.array([forward_x, -forward_z], dtype=np.float64) / norm
+                side = np.array([-unit[1], unit[0]])
+
+                def arrow_polygon(length, head_half_width, shaft_half_width):
+                    """按统一箭杆与三角箭头头样式生成可缩放轮廓。"""
+                    origin = np.array([px, py], dtype=np.float64)
+                    tip = origin + unit * length
+                    neck = origin + unit * (length * 0.48)
+                    shoulder = neck + side * head_half_width
+                    other_shoulder = neck - side * head_half_width
+                    shaft_left = origin + side * shaft_half_width
+                    shaft_right = origin - side * shaft_half_width
+                    return [tuple(np.rint(point).astype(int)) for point in
+                            (tip, shoulder, neck + side * shaft_half_width,
+                             shaft_left, shaft_right, neck - side * shaft_half_width,
+                             other_shoulder)]
+
+                draw.polygon(arrow_polygon(arrow_length, arrow_length * 0.28,
+                                           arrow_length * 0.13),
+                             fill=(18, 24, 22, 245))
+                draw.polygon(arrow_polygon(arrow_length * 0.88,
+                                           arrow_length * 0.24,
+                                           arrow_length * 0.085),
+                             fill=(255, 255, 255, 255))
+                draw.polygon(arrow_polygon(arrow_length * 0.76,
+                                           arrow_length * 0.20,
+                                           arrow_length * 0.05),
+                             fill=(*color, 255))
         sx, sy = points[0]
         gx, gy = points[-1]
         draw.ellipse((sx - 8, sy - 8, sx + 8, sy + 8), fill=(22, 116, 209, 255),
@@ -120,20 +235,13 @@ def main() -> None:
     prior = cfg.get("navigation", {})
     combined_path = args.combined_map or args.output.parent / "all_routes_mesh_overlay.png"
     combined_map = combined_route_map(routes, combined_path)
-    if combined_map is None and len(routes) == 1:
-        # 单条路线时直接复用已含路线与 NavMesh 的叠加图；新规范不再依赖坐标 sidecar。
-        overlay = routes[0][0] / "mesh_navmesh_topdown.png"
-        if overlay.is_file():
-            combined_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(overlay, combined_path)
-            combined_map = combined_path
     route_legend = "".join(
         f'<span><i style="background:rgb({int(colorsys.hsv_to_rgb(i / max(1, len(routes)), 0.82, 0.92)[0] * 255)},'
         f'{int(colorsys.hsv_to_rgb(i / max(1, len(routes)), 0.82, 0.92)[1] * 255)},'
         f'{int(colorsys.hsv_to_rgb(i / max(1, len(routes)), 0.82, 0.92)[2] * 255)})"></i>{esc(directory.name)}</span>'
         for i, (directory, _) in enumerate(routes))
     combined_section = (f'<section class="combined"><h2>全部路线叠加总览</h2>'
-                        f'<p>每种颜色对应一条路线；蓝色圆点为起点，橙色三角为终点。</p>'
+                        f'<p>彩色 mesh 纹理底图上每种颜色对应一条路线；小箭头为沿路程抽样的车头朝向，大箭头标出拐点前后的朝向，不叠加 NavMesh；蓝色圆点为起点，橙色三角为终点。</p>'
                         f'<a href="{html.escape(combined_map.name)}"><img class="combined-map" '
                         f'src="{html.escape(combined_map.name)}" alt="全部路线叠加在 mesh 底图"></a>'
                         f'<div class="route-legend">{route_legend}</div></section>'
@@ -156,9 +264,6 @@ def main() -> None:
                          "未通过" if report.get("camera_trajectory_prior", {}).get("route_within_buffer") is False else "未启用")
         map_html = (f'<img class="map" loading="lazy" src="{data_uri(image)}" alt="{esc(route)} NavMesh 与轨迹">'
                     if image.is_file() else "")
-        mesh_overlay = directory / "mesh_navmesh_topdown.png"
-        overlay_html = (f'<img class="map" loading="lazy" src="{data_uri(mesh_overlay)}" alt="{esc(route)} mesh/NavMesh 叠加">'
-                       if mesh_overlay.is_file() else "")
         mcap_file = next(iter(directory.glob("*.mcap")), None)
         mcap_link = (f'<a class="video" href="{html.escape(mcap_file.relative_to(args.output.parent).as_posix())}">下载 MCAP（含 RGB、Depth、Pose）</a>'
                      if mcap_file else "")
@@ -181,7 +286,6 @@ def main() -> None:
               <a class="video" href="{html.escape((directory / 'navigation_poses.json').relative_to(args.output.parent).as_posix())}">打开逐帧位姿 JSON</a>
             </div>
           </div>
-          {f'<div class="route-grid">{overlay_html}</div>' if overlay_html else ''}
           <div class="thumbs">{thumbs}</div>
         </article>""")
 
@@ -204,7 +308,7 @@ main{{max-width:1500px;margin:24px auto;padding:0 24px}} .stats{{display:grid;gr
 <p>批量生产配置：线速度 {motion.get('linear_speed_mps', '-') } m/s，角速度 {motion.get('angular_speed_radps', '-')} rad/s，路线先验缓冲区 {prior.get('camera_trajectory_buffer_m', '-')} m。</p>
 <p>结果目录：{esc(args.results)}；生成时间由本地文件系统记录。</p></header><main>
 <section class="stats"><div class="stat"><b>{len(routes)}</b><span>路线总数</span></div><div class="stat"><b>{valid}/{len(routes)}</b><span>NavMesh 可行走验证{f'（另 {valid_unknown} 条由生成流程验证）' if valid_unknown else ''}</span></div><div class="stat"><b>{prior_ok}/{len(routes)}</b><span>采集轨迹缓冲区通过{f'（另 {prior_unknown} 条未启用）' if prior_unknown else ''}</span></div><div class="stat"><b>{sum(distances)/len(distances):.1f} m</b><span>平均测地距离</span></div><div class="stat"><b>{sum(frames)}</b><span>RGB 总帧数</span></div></section>
-<p>每张大图显示全 NavMesh、当前路线起终点与实际运行轨迹；下方为关键 RGB 帧。绿色为 NavMesh 可行走区域，红线为路线，蓝点为起点，红点为终点。</p>
+<p>顶部总览为彩色 mesh 纹理底图上的全部路线叠加，不绘制 NavMesh；下方为各路线统计和关键 RGB 帧。</p>
 {combined_section}
 {''.join(cards)}</main><footer>由 Habitat-GS Wanda Plaza 导航验证流水线生成。HTML 内嵌 PNG，视频仍链接到同目录下的 MP4。</footer></body></html>"""
     args.output.write_text(doc, encoding="utf-8")

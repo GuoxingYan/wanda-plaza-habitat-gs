@@ -1,0 +1,210 @@
+# 阿克曼底盘全密度 MCAP 50 条路线配置；复用与 fullres-50 相同的 NavMesh 净距参数。数值单位均为米、秒、度或弧度，除非字段另有说明。
+scene:
+  # 裁剪场景目录；其中应包含同规格裁剪的 mesh、Gaussian PLY 和 stage 配置。
+  directory: data/scene_fullres
+  # true 时从碰撞 mesh 重新烘焙并覆盖 NavMesh；false 时复用已有 NavMesh。
+  bake_navmesh: true
+
+navmesh:
+  # Recast 水平栅格边长；越小越精细，但烘焙更慢、内存占用更高。
+  cell_size_m: 0.05
+  # Recast 垂直栅格高度；影响台阶和地面高度表达精度。
+  cell_height_m: 0.05
+  # 机器人/行人代理总宽度；半径由宽度的一半计算，用于墙边安全距离。
+  agent_width_m: 0.75
+  # 额外障碍物净距；NavMesh代理半径将为0.75/2+0.15=0.525米。
+  # 该余量会收缩窄路可行区域，让路线中心尽量远离墙面、立柱和其他障碍。
+  obstacle_clearance_m: 0.15
+  # 代理碰撞高度；低于此高度的空间会被判为不可通行。
+  agent_height_m: 1.5
+  # 可跨越的最大垂直台阶高度。
+  max_climb_m: 0.2
+  # 可行走表面的最大坡度角。
+  max_slope_deg: 35.0
+  # 可行走边缘允许的最大误差（米）；0 使用 Habitat/Recast 默认值。
+  edge_max_error_m: 0.0
+
+navigation:
+  # 固定随机种子，保证随机选取路线可复现。
+  seed: 17
+  # 是否使用 cameras.json 采集相机中心轨迹作为可行区域先验；开启时 NavMesh 路径必须位于缓冲区内。
+  use_camera_trajectory_prior: true
+  # 原始相机中心轨迹 JSON；相对路径按项目根目录解析，位置统一转换为 Habitat X/Y/Z。
+  camera_trajectory_file: data/Wanda Plaza/cameras.json
+  # 采集轨迹周围允许导航的平面距离（米）；轨迹缓冲区以 X/Z 平面计算。
+  camera_trajectory_buffer_m: 10.0
+  # 起点/终点优先从采集相机中心位置投影到 NavMesh 后选取；false 时只用三角面面积加权采样。
+  prefer_camera_trajectory_endpoints: true
+  # 是否按 cameras.json 在每个 NavMesh 连通岛上的采集密度过滤路线候选；默认开启。
+  use_camera_trajectory_density_filter: true
+  # 一个连通岛至少需要吸附成功的采集轨迹点数。
+  camera_trajectory_density_min_points: 20
+  # 每 100 平方米至少需要的采集点数；同时满足绝对点数和密度阈值才保留。
+  camera_trajectory_density_min_points_per_100m2: 0.5
+  # 最短路径允许的最小测地距离（米）。
+  min_route_length_m: 15.0
+  # 最短路径允许的最大测地距离（米）。
+  max_route_length_m: 100.0
+  # 随机起终点采样的最大尝试次数。
+  sample_attempts: 150
+  # 可选连通岛编号；null 时按面积和估计尺度自动选择适合目标路线长度的岛。
+  island_index: null
+  # 选定岛的最小面积（平方米），过滤过小、难以形成目标路线的孤立区域。
+  min_island_area_m2: 10.0
+  # 可选起点/终点，使用 Habitat Y-up 世界坐标 [x,y,z]；null 表示按可行走岛和三角面面积加权选取。
+  start: null
+  # 可选终点，坐标约定同 start；必须与 start 同时设置或同时留空。
+  goal: null
+
+motion:
+  # rich 使用丰富动作模板；设为 legacy 可恢复旧的直线路段与停车原地转向。
+  generation_profile: rich
+  # 底盘运动学：差速允许低速原地调向；Ackermann 额外受最小转弯半径约束。
+  model: ackermann
+  minimum_turn_radius_m: 1.2
+  max_lateral_acceleration_mps2: 1.0
+  curve_sample_spacing_m: 0.05
+  min_generated_route_length_m: 50.0
+  max_generated_route_length_m: 100.0
+  # 代理沿最短路径的最大前进速度（米/秒），会受 NavMesh try_step 约束。
+  linear_speed_mps: 3.0
+  # 朝向调整的最大角速度（弧度/秒），相邻输出帧的 yaw 变化不会超过此上限。
+  angular_speed_radps: 1.2
+  # 最大线加速度（米/秒²）；控制起步和重新加速的平滑程度。
+  max_acceleration_mps2: 1.0
+  # 最大制动减速度（米/秒²）；越小制动距离越长。
+  max_deceleration_mps2: 1.5
+  # 输出视频帧率；它也定义每帧模拟时间步长 dt=1/fps。
+  fps: 10
+  # RGB 相机安装高度（米），相对于代理地面位置。
+  camera_height_m: 1.5
+  actions:
+    curve_radius_m: 1.2
+    s_curve_angle_deg: 55.0
+    tangent_curve_angle_deg: 70.0
+    dead_end_min_length_m: 8.0
+    dead_end_max_length_m: 20.0
+    dead_end_probe_spacing_m: 0.5
+    dead_end_pause_s: 0.5
+    # 正向路段连接时尝试切向连续运动的概率；不满足几何或 NavMesh 约束时回退。
+    tangent_connector_probability: 0.35
+    route_extension_attempts: 40
+
+avoidance:
+  # 开关：启用后在路线中段放置程序化圆柱并重新规划绕行路线。
+  enabled: false
+  # 障碍物沿原路线累计距离的放置比例；0.5 表示中点。
+  placement_fraction: 0.5
+  # 圆柱实体半径（米）；当前原型尚未检查障碍本身与原场景的几何碰撞。
+  obstacle_radius_m: 0.35
+  # 圆柱实体高度（米），必须大于 0.5 米。
+  obstacle_height_m: 1.0
+  # 路径距障碍中心小于此距离时触发绕行（米）。
+  trigger_distance_m: 2.0
+  # 代理半宽之外的额外绕行净距（米）。
+  safety_margin_m: 0.25
+  # 绕行 A* 网格分辨率（米）。
+  grid_resolution_m: 0.15
+  # 原始路线两侧允许搜索的最大走廊宽度（米）。
+  corridor_width_m: 4.0
+  # A* 最大扩展网格单元数。
+  max_search_cells: 250000
+  # 自验证时可强制触发。
+  force: false
+
+camera:
+  # D435 RGB 传感器图像宽度（像素）。
+  width: 640
+  # D435 RGB 传感器图像高度（像素）。
+  height: 360
+  # D435 RGB 标称水平视场角；这是理想针孔近似值，不替代逐机标定。
+  hfov_deg: 69.0
+  # 相机近裁剪平面（米），小于此距离的物体不渲染。
+  near_m: 0.05
+  # 相机远裁剪平面（米），大于此距离的物体不渲染。
+  far_m: 500.0
+  # 独立的深度显示预览；真实 /camera/depth 仍保留 32FC1 米制数据。
+  depth_preview:
+    # 开关；开启后 MCAP 增加 /camera/depth_preview 话题，便于 Foxglove 直接查看结构。
+    enabled: true
+    # 预览映射的最小距离（米）；此值及更近的点显示为黑色。
+    min_m: 0.0
+    # 预览映射的最大距离（米）；此值及更远的点显示为白色，建议按场景调整。
+    max_m: 20.0
+    # 预览消息编码；目前使用单通道 8 位灰度 mono8。
+    encoding: mono8
+
+output:
+  # 保存同步 RGB、米制深度、位姿和标签。
+  mcap: true
+  # 是否写入导航 RGB MP4 视频。
+  video: true
+  # 是否写入包含起终点和所有逐帧相机位姿的 JSON 文件。
+  poses_json: true
+  # 是否写入 NavMesh、轨迹、起终点俯视图。
+  trajectory_topdown: false
+  # 是否写入彩色 mesh 顶视图与 NavMesh 的半透明叠加图。
+  mesh_navmesh_overlay: false
+  # 是否生成真实 Habitat-GS 俯视渲染与逐顶点投影 NavMesh 叠加图；高分辨率额外渲染开销较大。
+  gaussian_navmesh_overlay: false
+  # 是否输出 cameras.json 轨迹密度过滤开启/关闭的并排对比图。
+  camera_trajectory_density_comparison: false
+  # 是否额外保存首帧、中间帧、末帧 RGB PNG。
+  rgb_keyframes: true
+  # MCAP 开启时是否额外保存首帧深度预览 PNG（8 位灰度，仅供查看，不替代米制原始深度）。
+  depth_keyframes: true
+  # mesh 顶视颜色底图的最大输入顶点数；null 表示使用全部顶点。
+  # 大场景可设为 2000000 降低内存，图像仍会按像素聚合而不是随机画碎点。
+  topdown_max_points: null
+
+# 批量生成控制：每条路线分别输出视频、JSON 和俯视图。
+generation:
+  # 要生成的导航轨迹条数；每条使用 seed + 条目索引，输出到 route_0000 等目录。
+  trajectory_count: 50
+  composition_mode: mixed
+  composite_fraction: 0.70
+  action_attempts_per_scale: 100
+
+# 俯视图绘制参数，改变外观不会改变碰撞几何或导航结果。
+visualization:
+  # 俯视图输出宽度（像素）；配合高度和 DPI 控制导出细节。
+  image_width_px: 3600
+  # 俯视图输出高度（像素）。
+  image_height_px: 3000
+  # 输出图片每英寸像素数；主要影响标注文字/线条细度，不改变指定像素尺寸。
+  dpi: 220
+  # 俯视颜色底图每像素对应的世界尺寸（米）；越小保留的局部纹理细节越多。
+  topdown_pixel_size_m: 0.06
+  # 底图颜色邻域平滑半径（像素）；0 关闭，建议 1-2 降低孤立噪点。
+  topdown_smoothing_px: 1
+  # NavMesh 半透明覆盖层的不透明度，范围 [0,1]。
+  navmesh_alpha: 0.32
+  # NavMesh 覆盖颜色，使用 HTML 十六进制颜色。
+  navmesh_color: '#2b9d57'
+  # mesh 底图上 NavMesh 的透明度。
+  mesh_overlay_alpha: 0.28
+  # Gaussian 底图上 NavMesh 的透明度。
+  gaussian_overlay_alpha: 0.42
+  # Gaussian 正交俯视图高于 NavMesh 最高点的相机距离（米）；正交投影下该值只用于确定裁剪深度。
+  gaussian_topdown_height_m: 80.0
+  # 俯视图只保留 NavMesh 高度范围上方此距离以内的 Gaussian，抑制树冠、建筑高层等漂浮投影。
+  gaussian_topdown_height_above_walkable_m: 2.0
+  # 俯视图只保留 NavMesh 最低高度下方此距离以内的 Gaussian，抑制地下噪声和远离地面的离群点。
+  gaussian_topdown_depth_below_walkable_m: 0.5
+  # 每个正交 Gaussian 俯视渲染块覆盖的世界边长；较小能更好适应起伏地面，渲染次数也更多。
+  gaussian_topdown_tile_size_m: 64.0
+  # 单个俯视渲染块的正方形像素分辨率；拼接后输出仍使用 image_width_px/image_height_px。
+  gaussian_topdown_tile_resolution_px: 768
+  # 正交相机离当前块可行走面中位高度的距离（米），与上下切片厚度共同决定渲染裁剪范围。
+  gaussian_topdown_camera_height_m: 8.0
+  # 轨迹线颜色。
+  trajectory_color: '#d62728'
+  # 轨迹线宽，单位为绘图点。
+  trajectory_linewidth: 1.7
+
+  # 局部放大范围，每项为 [X最小,X最大,Z最小,Z最大]，单位米；空列表关闭。
+  # 以下覆盖广场环岛、右侧通道与下侧转角，可按待检查立柱坐标调整。
+  detail_regions_xz:
+    - [-58, -25, -15, 20]
+    - [82, 120, -15, 35]
+    - [-60, 0, -145, -100]

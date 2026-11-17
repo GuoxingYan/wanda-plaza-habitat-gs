@@ -25,14 +25,15 @@ class McapOutputTest(unittest.TestCase):
         np.testing.assert_array_equal(preview, [[0, 128, 255, 255]])
         np.testing.assert_array_equal(values, [[0.0, 10.0, 20.0, 30.0]])
 
-    def test_writes_rgb_depth_pose_camera_info_and_default_tag(self):
+    def test_writes_rgb_depth_pose_camera_info_and_trajectory_tags(self):
         with tempfile.NamedTemporaryFile(suffix=".mcap") as stream:
             writer = NavigationMcapWriter(
                 stream.name, "route_0000",
                 {"width": 4, "height": 3, "fx": 2.0, "fy": 2.0,
                  "cx": 1.5, "cy": 1.0},
                 metadata={"depth_preview": {"enabled": True, "min_m": 0.0,
-                                             "max_m": 20.0, "encoding": "mono8"}})
+                                             "max_m": 20.0, "encoding": "mono8"}},
+                tags=["straight_backward", "curved_trajectory_major"])
             stamp = writer.timestamp_ns(0)
             rgb = np.zeros((3, 4, 3), dtype=np.uint8)
             depth = np.full((3, 4), 2.5, dtype=np.float32)
@@ -70,7 +71,8 @@ class McapOutputTest(unittest.TestCase):
             self.assertEqual(topics.count("/camera/depth_preview"), 1)
             tag = next(message.data for _, channel, message in messages
                        if channel.topic == "/trajectory/tags")
-            self.assertIn(b"straight_forward", tag)
+            self.assertIn(b"straight_backward", tag)
+            self.assertIn(b"curved_trajectory_major", tag)
             self.assertIn(b"route_0000", tag)
             image = next(message.data for _, channel, message in messages
                          if channel.topic == "/camera/rgb")

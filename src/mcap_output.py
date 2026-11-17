@@ -273,10 +273,12 @@ bool do_rectify
         "wanda_nav.TrajectoryTags": "binary FileDescriptorSet",
     }
 
-    def __init__(self, path, trajectory_id, camera, metadata=None, start_time_ns=None):
+    def __init__(self, path, trajectory_id, camera, metadata=None, start_time_ns=None,
+                 tags=None):
         """初始化带 ROS2 标准消息、有效时间戳和 ZSTD 压缩的 MCAP 写入器。"""
         self.path = path
         self.trajectory_id = trajectory_id
+        self.tags = list(tags or [])
         self.camera = camera
         self.depth_far_clip_m = float((metadata or {}).get("depth_far_clip_m", 500.0))
         self.start_time_ns = (int(start_time_ns) if start_time_ns is not None
@@ -374,9 +376,10 @@ bool do_rectify
             self.sequence += 1
 
     def finish(self):
-        """追加默认路线标签并结束 MCAP 文件。"""
-        tags = (_protobuf_string(1, self.trajectory_id) +
-                _protobuf_string(2, "straight_forward"))
+        """追加调用方提供的路线标签并结束 MCAP 文件。"""
+        tags = _protobuf_string(1, self.trajectory_id)
+        for tag in self.tags:
+            tags += _protobuf_string(2, tag)
         timestamp_ns = self.timestamp_ns(0)
         self.writer.add_message(self.channels["/trajectory/tags"], timestamp_ns,
                                 tags, timestamp_ns, self.sequence)

@@ -470,6 +470,8 @@ def topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, isl
         ax.legend(loc="upper right", framealpha=0.95)
         ax.set_title("NavMesh 全連通區與導航軌跡")
         fig.tight_layout()
+        _add_sampled_heading_arrows(ax, frames, trajectory,
+                                    visual["trajectory_color"])
         _save_figure(fig, output_dir / "trajectory_topdown.png", config)
 
     stage = json.loads((scene_dir / "wanda.stage_config.json").read_text(encoding="utf-8"))
@@ -516,4 +518,59 @@ def topdown_plots(pathfinder, points, frames, scene_dir, output_dir, config, isl
             ax.set_title(f"局部 {index+1}：彩色 Mesh + NavMesh（米制坐标）")
             fig.tight_layout()
             _save_figure(fig, output_dir / f"mesh_navmesh_detail_{index:02d}.png", config)
+
+
+def _add_sampled_heading_arrows(ax, frames, trajectory, trajectory_color):
+    """沿路线距离和显著拐点抽样绘制统一样式的车头朝向箭头。"""
+    from matplotlib.patches import FancyArrowPatch
+
+    if len(frames) < 2:
+        return
+    positions = np.asarray([frame[0] for frame in frames], dtype=np.float64)
+    cumulative = np.concatenate(([0.0], np.cumsum(np.linalg.norm(
+        np.diff(positions[:, [0, 2]], axis=0), axis=1))))
+    distance = float(cumulative[-1])
+    sample_count = min(9, max(2, int(distance // 8.0)))
+    samples = set(np.searchsorted(
+        cumulative, np.linspace(distance * 0.08, distance * 0.92, sample_count)
+    ).clip(0, len(frames) - 1).tolist())
+
+    yaw = np.unwrap(np.asarray([frame[1] for frame in frames], dtype=np.float64))
+    window = max(2, int(round(0.5 * 10)))
+    turn_mask = np.zeros(len(frames), dtype=bool)
+    for index in range(window, len(frames) - window):
+        turn_mask[index] = abs(yaw[index + window] - yaw[index - window]) >= np.deg2rad(20)
+    turn_indices = np.flatnonzero(turn_mask)
+    runs = []
+    if len(turn_indices):
+        start = previous = int(turn_indices[0])
+        for index in turn_indices[1:]:
+            index = int(index)
+            if index - previous > 15:
+                runs.append((start, previous))
+                start = index
+            previous = index
+        runs.append((start, previous))
+    turn_samples = set()
+    for start, end in runs:
+        if abs(yaw[end + window] - yaw[start - window]) >= np.deg2rad(25):
+            turn_samples.add((start + end) // 2)
+    samples.update(turn_samples)
+
+    for index in sorted(samples):
+        x, y, z = positions[index]
+        heading = yaw[index]
+        length_m = 2.6 if index in turn_samples else 1.6
+        end = (x - np.sin(heading) * length_m,
+               z - np.cos(heading) * length_m)
+        is_turn = index in turn_samples
+        for color, linewidth, scale, zorder in (
+                ("white", 3.5 if is_turn else 2.8,
+                 17 if is_turn else 13, 7),
+                ("#18211d", 1.7 if is_turn else 1.3,
+                 13 if is_turn else 9, 8)):
+            ax.add_patch(FancyArrowPatch(
+                (x, z), end, arrowstyle="-|>", mutation_scale=scale,
+                linewidth=linewidth, color=color, shrinkA=0, shrinkB=0,
+                transform=ax.transData, clip_on=True, zorder=zorder))
 

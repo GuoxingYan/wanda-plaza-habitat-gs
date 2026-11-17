@@ -114,9 +114,9 @@ avoidance:
 
 camera:
   # D435 RGB 传感器图像宽度（像素）。
-  width: 1280
+  width: 640
   # D435 RGB 传感器图像高度（像素）。
-  height: 720
+  height: 360
   # D435 RGB 标称水平视场角；这是理想针孔近似值，不替代逐机标定。
   hfov_deg: 69.0
   # 相机近裁剪平面（米），小于此距离的物体不渲染。
@@ -149,6 +149,8 @@ output:
   camera_trajectory_density_comparison: true
   # 是否额外保存首帧、中间帧、末帧 RGB PNG。
   rgb_keyframes: true
+  # MCAP 开启时是否额外保存首帧深度预览 PNG（8 位灰度，仅供查看，不替代米制原始深度）。
+  depth_keyframes: true
   # mesh 顶视颜色底图的最大输入顶点数；null 表示使用全部顶点。
   # 大场景可设为 2000000 降低内存，图像仍会按像素聚合而不是随机画碎点。
   topdown_max_points: null
