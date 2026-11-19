@@ -267,6 +267,7 @@ def run_one(args, config, render_sim=None):
                         "linear_speed_mps": float(config["motion"]["linear_speed_mps"]),
                         "angular_speed_radps": float(config["motion"]["angular_speed_radps"]),
                         "depth_far_clip_m": float(camera["far_m"]),
+                        "jpeg_quality": int(camera.get("jpeg_quality", 90)),
                         "depth_preview": config["camera"].get("depth_preview", {}),
                     }, tags=trajectory_tags)
             try:

@@ -1,4 +1,4 @@
-# Wanda Plaza Habitat-GS 导航
+# Wanda Plaza / SanyaPo Habitat-GS 导航
 
 室外场景导航数据生成与验证工具：从带颜色的 mesh 生成 NavMesh，结合 `cameras.json` 采集轨迹先验规划路线，并按运动学约束生成 D435 视角的 Gaussian RGB 视频、位姿 JSON、MCAP 和诊断图。丰富运动模式支持弧线掉头、S 弯、切向弧线及盲端倒车；正向段连接会尝试切向连续运动，候选不满足 NavMesh 或轨迹缓冲约束时回退到常规连接。
 
@@ -22,6 +22,13 @@ bash scripts/run_batch_50.sh configs/ackermann-50.yaml \
   outputs/ackermann-50 data/scene_fullres
 # 输出：outputs/ackermann-50/route_0000..route_0049/*.mcap
 #       outputs/ackermann-50/summary.html
+
+# SanyaPo 原始数据：先按 Gaussian 数量自动递归切块并落盘缓存
+/data/anaconda3/envs/cloudrobo-habitat-gs/bin/python \
+  scripts/split_sanyapo_scene.py --input data/sanyapo \
+  --output data/sanyapo/tiles --max-gaussians 15000000
+# 每个 tile 保存 mesh.ply、point_cloud.ply、cameras.json 和 bounds.json，
+# data/sanyapo/tiles/manifest.json 存储清单；输入不变时重复执行会直接复用缓存。
 
 # 使用默认配置生成一条路线并验证
 bash scripts/run_validation.sh --config configs/default.yaml --single
@@ -75,7 +82,13 @@ bash scripts/run_validation.sh --config configs/examples/avoidance-demo.yaml --s
 | `build_habitat_gs.sh` | 在项目指定 Conda/CUDA 环境中，从 `third_party/habitat-gs` 构建并安装 Habitat-GS。 | 仅在首次搭建或需要重建 Habitat-GS 依赖时运行；会执行本地软件包安装，日常生成数据不需要运行。 |
 | `migrate_local_data.sh` | 将旧 `deployment/` 下列出的本地场景、日志和结果目录移动到 `data/`，并跳过目标位置已存在的项目。 | `bash scripts/migrate_local_data.sh [旧 deployment 目录]`。这是文件移动操作；运行前先检查源/目标目录及脚本列出的目录，不要用于生成数据。 |
 
-场景准备和结果汇总本身目前由 Python 入口完成：`scripts/prepare_scene.py` 准备场景，`scripts/summarize_results.py` 单独重建 HTML；两者没有额外的 `.sh` 包装脚本。
+场景准备和结果汇总本身目前由 Python 入口完成：`scripts/prepare_scene.py` 准备 Wanda 场景，`scripts/split_sanyapo_scene.py` 为 SanyaPo 做递归切分缓存，`scripts/summarize_results.py` 单独重建 HTML；这些 Python 入口没有额外的 `.sh` 包装脚本。
+
+### SanyaPo 切分规则与限制
+
+`split_sanyapo_scene.py` 以 Gaussian 的 XY 分布为依据递归二分：块内数量不超过 `--max-gaussians` 就停止，否则沿较长轴按中位数继续切分，直到所有块满足上限或触发 `--min-size`。每个 mesh 三角面按质心唯一归属 tile，跨边界三角形会复制它所需的顶点；相机按同一 XY 规则写入对应 `cameras.json`。这一步只生成原始坐标的缓存块，不会自动生成 Habitat `stage_config` 或 NavMesh。
+
+SanyaPo 当前 `point_cloud.ply` 是 17 个 float32 属性的 Gaussian 格式，而仓库现有 `prepare_scene.py` 面向 Wanda 的 62 列 SH 格式。因此不能直接把 SanyaPo tile 当作 `data/scene_fullres` 运行；需要使用支持该 17 列格式的 Habitat-GS 资产转换器，完成坐标转换、stage 配置和 NavMesh 后，再调用 `run_batch_50.sh` 生成 MCAP 与 `summary.html`。MCAP 中 RGB 已使用 ROS 2 `sensor_msgs/CompressedImage` JPEG 质量 90，深度仍为米制 `32FC1`。
 
 ## 目录
 

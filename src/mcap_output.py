@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timezone
 import struct
 import time
+from io import BytesIO
 
 from mcap.writer import CompressionType, Writer
 
@@ -69,6 +70,24 @@ def _image(stamp_ns, frame_id, rgb_or_depth, encoding, is_bigendian=0):
         _pack(buffer, "B", is_bigendian)
         _pack(buffer, "I", step)
         _sequence(buffer, data, "B")
+
+    return _cdr(serialize)
+
+
+def _compressed_image(stamp_ns, frame_id, rgb, quality=90):
+    """将 RGB 帧编码为 JPEG，并封装为 ROS 2 CompressedImage CDR 消息。"""
+    import numpy as np
+    from PIL import Image
+
+    image = Image.fromarray(np.ascontiguousarray(rgb, dtype=np.uint8), mode="RGB")
+    stream = BytesIO()
+    image.save(stream, format="JPEG", quality=int(quality), optimize=True)
+    payload = stream.getvalue()
+
+    def serialize(buffer):
+        _header(buffer, stamp_ns, frame_id)
+        _string(buffer, "jpeg")
+        _sequence(buffer, payload, "B")
 
     return _cdr(serialize)
 
@@ -217,6 +236,18 @@ MSG: builtin_interfaces/Time
 int32 sec
 uint32 nanosec
 """,
+        "sensor_msgs/CompressedImage": """std_msgs/Header header
+string format
+uint8[] data
+================================================================================
+MSG: std_msgs/Header
+builtin_interfaces/Time stamp
+string frame_id
+================================================================================
+MSG: builtin_interfaces/Time
+int32 sec
+uint32 nanosec
+""",
         "geometry_msgs/PoseStamped": """std_msgs/Header header
 geometry_msgs/Pose pose
 ================================================================================
@@ -280,6 +311,9 @@ bool do_rectify
         self.trajectory_id = trajectory_id
         self.tags = list(tags or [])
         self.camera = camera
+        self.jpeg_quality = int((metadata or {}).get("jpeg_quality", 90))
+        if not 1 <= self.jpeg_quality <= 100:
+            raise ValueError("jpeg_quality 必须位于 1 到 100 之间")
         self.depth_far_clip_m = float((metadata or {}).get("depth_far_clip_m", 500.0))
         self.start_time_ns = (int(start_time_ns) if start_time_ns is not None
                               else time.time_ns())
@@ -297,7 +331,7 @@ bool do_rectify
                     else text.encode("utf-8"))
             self.schemas[name] = self.writer.register_schema(name, encoding, data)
         for topic, name, encoding, ros2_type in (
-            ("/camera/rgb", "sensor_msgs/Image", "cdr", "sensor_msgs/msg/Image"),
+            ("/camera/rgb", "sensor_msgs/CompressedImage", "cdr", "sensor_msgs/msg/CompressedImage"),
             ("/camera/depth", "sensor_msgs/Image", "cdr", "sensor_msgs/msg/Image"),
             ("/camera/info", "sensor_msgs/CameraInfo", "cdr", "sensor_msgs/msg/CameraInfo"),
             ("/trajectory/pose", "geometry_msgs/PoseStamped", "cdr", "geometry_msgs/msg/PoseStamped"),
@@ -354,7 +388,8 @@ bool do_rectify
         """按同一时间戳写入 RGB、有限值深度和相机位姿。"""
         depth = sanitize_depth(depth, self.depth_far_clip_m)
         messages = (
-            ("/camera/rgb", _image(timestamp_ns, "camera_color_optical_frame", rgb, "rgb8")),
+            ("/camera/rgb", _compressed_image(timestamp_ns, "camera_color_optical_frame", rgb,
+                                               self.jpeg_quality)),
             ("/camera/depth", _image(timestamp_ns, "camera_depth_optical_frame", depth, "32FC1")),
             ("/trajectory/pose", _pose(timestamp_ns, "world", position, xyzw)),
         )

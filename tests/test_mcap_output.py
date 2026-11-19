@@ -7,7 +7,8 @@ from mcap.reader import make_reader
 from mcap_ros2.reader import read_ros2_messages
 from google.protobuf.descriptor_pb2 import FileDescriptorSet
 
-from src.mcap_output import NavigationMcapWriter, depth_preview, sanitize_depth
+from src.mcap_output import (NavigationMcapWriter, _compressed_image,
+                             depth_preview, sanitize_depth)
 
 
 class McapOutputTest(unittest.TestCase):
@@ -77,14 +78,13 @@ class McapOutputTest(unittest.TestCase):
             image = next(message.data for _, channel, message in messages
                          if channel.topic == "/camera/rgb")
             self.assertTrue(image.startswith(b"\x00\x01\x00\x00"))
-            self.assertIn(b"rgb8\x00", image)
-            self.assertIn(np.zeros((3, 4, 3), dtype=np.uint8).tobytes(), image)
+            self.assertIn(b"jpeg\x00", image)
+            self.assertTrue(image.endswith(b"\xff\xd9"))
             decoded = list(read_ros2_messages(stream.name, topics=[
-                "/camera/rgb", "/camera/depth", "/camera/depth_preview",
+                "/camera/depth", "/camera/depth_preview",
                 "/camera/info", "/trajectory/pose"]))
-            self.assertEqual(len(decoded), 5)
+            self.assertEqual(len(decoded), 4)
             decoded_by_topic = {message.channel.topic: message.ros_msg for message in decoded}
-            self.assertEqual(decoded_by_topic["/camera/rgb"].encoding, "rgb8")
             self.assertEqual(decoded_by_topic["/camera/depth"].encoding, "32FC1")
             self.assertEqual(decoded_by_topic["/camera/depth_preview"].encoding, "mono8")
             np.testing.assert_array_equal(
@@ -100,6 +100,22 @@ class McapOutputTest(unittest.TestCase):
             for _, channel, message in messages:
                 if channel.topic in ("/camera/rgb", "/camera/depth", "/trajectory/pose"):
                     self.assertGreater(message.log_time, 0)
+
+    def test_compressed_rgb_is_decodable_jpeg_at_requested_quality(self):
+        """验证压缩 RGB CDR 消息声明 jpeg 且包含有效 JPEG 图像。"""
+        from io import BytesIO
+        from PIL import Image
+
+        rgb = np.zeros((8, 12, 3), dtype=np.uint8)
+        payload = _compressed_image(1_000_000_000, "camera_color_optical_frame", rgb, 90)
+        marker = payload.index(b"jpeg\x00") + len(b"jpeg\x00")
+        marker += (-marker) % 4
+        jpeg_size = int.from_bytes(payload[marker:marker + 4], "little")
+        jpeg = payload[marker + 4:marker + 4 + jpeg_size]
+        self.assertTrue(jpeg.startswith(b"\xff\xd8"))
+        with Image.open(BytesIO(jpeg)) as image:
+            self.assertEqual(image.size, (12, 8))
+            self.assertEqual(image.format, "JPEG")
 
 
 if __name__ == "__main__":
