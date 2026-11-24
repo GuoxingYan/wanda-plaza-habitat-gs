@@ -4,9 +4,52 @@ import tempfile
 from pathlib import Path
 
 from src.cli import effective_config_text, is_route_complete, required_route_outputs
+from src.output_manifest import build_route_manifest, config_digest, write_batch_manifest, write_json_atomic
 
 
 class BatchResumeTest(unittest.TestCase):
+    def test_mcap_resume_checks_recorded_configuration(self):
+        """已有配置快照不能让不同编码的旧 MCAP 被当成本次产物。"""
+        with tempfile.TemporaryDirectory() as directory:
+            route = Path(directory)
+            config = {"output": {"mcap": True, "video": False, "poses_json": False,
+                                 "validation_json": False},
+                      "camera": {"mcap": {"rgb": {"encoding": "h264"}}}}
+            name = f"trajectory_{route.name}.mcap"
+            (route / name).write_bytes(b"completed")
+            (route / "effective_config.yaml").touch()
+            write_json_atomic(route / "manifest.json", {
+                "schema_version": 1, "config_sha256": config_digest(config), "mcap": name,
+                "artifacts": [{"path": name, "size_bytes": 9}],
+            })
+            self.assertTrue(is_route_complete(route, {}, config))
+            changed = {**config, "camera": {"mcap": {"rgb": {"encoding": "jpeg"}}}}
+            self.assertFalse(is_route_complete(route, {}, changed))
+            (route / name).write_bytes(b"short")
+            self.assertFalse(is_route_complete(route, {}, config))
+
+    def test_manifest_indexes_route_without_opening_mcap(self):
+        """验证 manifest 索引编码和文件大小且不依赖 MCAP 读取。"""
+        with tempfile.TemporaryDirectory() as directory:
+            route = Path(directory) / "route_0000"
+            route.mkdir()
+            (route / "trajectory_route_0000.mcap").write_bytes(b"mcap-data")
+            config = {"navigation": {"seed": 7},
+                      "camera": {"width": 640, "height": 360,
+                                 "mcap": {"rgb": {"encoding": "h264"},
+                                          "depth": {"encoding": "16UC1", "scale_m": 0.01}}},
+                      "motion": {"fps": 10}}
+            route_manifest = build_route_manifest(
+                route, config, {"tags": ["turn"], "rgb_frames": 12})
+            self.assertEqual(route_manifest["mcap"], "trajectory_route_0000.mcap")
+            self.assertEqual(route_manifest["encoding"]["rgb"]["codec"], "h264")
+            self.assertEqual(route_manifest["encoding"]["depth"]["format"], "16UC1")
+            self.assertAlmostEqual(route_manifest["duration_s"], 1.1)
+            write_json_atomic(route / "manifest.json", route_manifest)
+            batch = write_batch_manifest(directory)
+            self.assertEqual(batch[0]["frame_count"], 12)
+            self.assertEqual(batch[0]["mcap"], "route_0000/trajectory_route_0000.mcap")
+
     def test_effective_config_preserves_chinese_comments_and_route_seed(self):
         import tempfile
 

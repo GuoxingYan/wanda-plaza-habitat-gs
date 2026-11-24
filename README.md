@@ -61,7 +61,11 @@ bash scripts/run_validation.sh --config configs/examples/avoidance-demo.yaml --s
 
 `scripts/run_batch_50.sh <配置> <输出目录> <场景目录>` 是通用 50 条入口。它复用已经存在的 NavMesh，逐条生成路线，并在整批成功后调用 `scripts/summarize_results.py` 写出 `<输出目录>/summary.html`。脚本不会自动烘焙 NavMesh；首次准备场景时先用 `--bake-only` 烘焙，再运行批次。批次可中断后用同一命令续跑，已完成且文件齐全的路线会跳过；不要在输出目录中混用不同配置。需要从头重建时使用底层入口的 `--force`，它会覆盖已有路线结果。
 
-阿克曼 50 条推荐流程使用 `configs/ackermann-50.yaml`：它打开 MCAP，保留相机轨迹先验过滤，并关闭耗时较高且不影响 MCAP 内容的俯视图和密度对比图。每条 MCAP 包含原始 RGB、32 位米制深度、深度预览、位姿、相机信息和轨迹标签；深度数据会使 MCAP 显著大于 MP4。若不需要 Foxglove 深度预览，可在配置中将 `camera.depth_preview.enabled` 设为 `false` 以减小文件体积。阿克曼约束下部分丰富动作路线可能规划失败；入口会保留失败报告并返回错误，不会悄悄切换到差速或 legacy 模式。调整最小转弯半径、动作约束或失败路线后，可用同一命令续跑。
+阿克曼 50 条推荐流程使用 `configs/ackermann-50.yaml`：它打开 MCAP，保留相机轨迹先验过滤，并关闭耗时较高且不影响 MCAP 内容的俯视图和密度对比图。MCAP RGB 可选 `camera.mcap.rgb.encoding: jpeg|h264`，深度可选 `camera.mcap.depth.encoding: 32FC1|16UC1`；通用默认仍是 JPEG + 32FC1 以兼容未验证的播放器，而阿克曼批量配置显式采用 H.264 + 16UC1 并关闭 depth_preview，优先减少归档体积。16UC1 按 `scale_m` 解码为米，厘米量化的理论误差不超过 0.5 cm、量程约 655 m。`camera.depth_preview.enabled` 控制 Foxglove 灰度预览话题；`camera.depth_compression.enabled` 控制额外的 D32Z/zlib 无损深度副本，需下游按自定义格式解码。
+
+`.scratch/mcap-storage/results/benchmark.json` 记录了对现有 `route_0003`（640×360、577 帧）的单次基准：JPEG+32FC1 约 428 MB，JPEG+16UC1 约 188 MB；H.264+32FC1 约 405 MB，H.264+16UC1 约 167 MB。四组 RGB 解码均成功；16UC1 组合的文件体积下降约 56%，H.264 相对 JPEG 仅再减少约 5%，本次测得 H.264 解码时间更短。该样本支持保留 JPEG/32FC1 为兼容默认，将 16UC1 作为显著节省空间的显式选项；H.264 适合偏播放/体积的用途。此结果是本机单路线单次测量，不代表跨硬件或所有场景性能。
+
+每条成功路线会生成 `manifest.json`，批次根目录也会生成汇总 `manifest.json`，列出路径、文件大小、标签、帧数、相机及编码摘要。检索这些内容不需要打开 MCAP；manifest 是可重建索引，不替代 MCAP 内的原始消息。
 
 只重建汇总页而不重新生成数据：
 

@@ -123,16 +123,27 @@ camera:
   near_m: 0.05
   # 相机远裁剪平面（米），大于此距离的物体不渲染。
   far_m: 500.0
-  # 独立的深度显示预览；真实 /camera/depth 仍保留 32FC1 米制数据。
+  # 独立的显示预览；不影响 /camera/depth 的编码和量化。
   depth_preview:
     # 开关；开启后 MCAP 增加 /camera/depth_preview 话题，便于 Foxglove 直接查看结构。
-    enabled: true
+    enabled: false
     # 预览映射的最小距离（米）；此值及更近的点显示为黑色。
     min_m: 0.0
     # 预览映射的最大距离（米）；此值及更远的点显示为白色，建议按场景调整。
     max_m: 20.0
     # 预览消息编码；目前使用单通道 8 位灰度 mono8。
     encoding: mono8
+  # MCAP 专用编码；未配置时保留 JPEG 与无损 32FC1 默认。
+  mcap:
+    rgb:
+      encoding: h264
+      quality: 90
+      crf: 23
+      preset: fast
+      keyframe_interval: 30
+    depth:
+      encoding: 16UC1
+      scale_m: 0.01
 
 output:
   # 保存同步 RGB、米制深度、位姿和标签。
@@ -151,7 +162,7 @@ output:
   camera_trajectory_density_comparison: false
   # 是否额外保存首帧、中间帧、末帧 RGB PNG。
   rgb_keyframes: true
-  # MCAP 开启时是否额外保存首帧深度预览 PNG（8 位灰度，仅供查看，不替代米制原始深度）。
+  # MCAP 开启时是否额外保存首帧浮点深度 TIFF；与预览话题独立。
   depth_keyframes: true
   # mesh 顶视颜色底图的最大输入顶点数；null 表示使用全部顶点。
   # 大场景可设为 2000000 降低内存，图像仍会按像素聚合而不是随机画碎点。

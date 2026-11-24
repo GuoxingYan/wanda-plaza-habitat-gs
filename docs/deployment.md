@@ -51,8 +51,9 @@ mesh 和 Gaussian 使用同一源坐标包围盒；mesh 三角形仅在三个顶
 
 - `validation.json`：生效配置摘要、NavMesh/路径统计、逐帧验证结果。
 - `navigation_poses.json`：起终点及每帧相机 `position` 和 `xyzw` 四元数，不记录 agent 字段。
-- `trajectory_<route_id>.mcap`：ROS 2 CDR 编码的 RGB、米制 `32FC1` Depth、CameraInfo、PoseStamped，以及根据实际轨迹运动分类写入的轨迹标签；标签定义见 [README](../README.md#轨迹标签)。
-- `depth_0000.png`：可选的首帧深度灰度预览；映射范围由 `camera.depth_preview` 控制，仅供查看，原始米制深度仍在 MCAP 中。
+- `trajectory_<route_id>.mcap`：按 `camera.mcap` 配置写入 JPEG/H.264 RGB、`32FC1`/`16UC1` Depth、CameraInfo、PoseStamped，以及根据实际轨迹运动分类写入的轨迹标签；深度预览和 D32Z 无损副本可分别通过配置开关控制。标签定义见 [README](../README.md#轨迹标签)。
+- `depth_0000.tiff`：可选的首帧深度数据预览；保留浮点米制值，不做灰度映射，不替代 MCAP 深度帧。
+- `manifest.json`：路线级文件索引，批次根目录也有汇总索引，可直接查询帧数、时长、编码、文件大小和配置指纹，无需打开 MCAP。
 - `navigation_rgb.mp4`、`rgb_*.png`：全密度 Gaussian 的相机视角渲染。
 - `trajectory_topdown.png`：NavMesh、轨迹、起终点与障碍标记。
 - `mesh_navmesh_topdown.png`：彩色 mesh 顶视聚合与 NavMesh 叠图。

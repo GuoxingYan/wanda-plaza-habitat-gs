@@ -1,9 +1,15 @@
 """将同步 RGB、Depth、相机位姿和轨迹标签写入 ROS 2 风格 MCAP。"""
 import json
 from datetime import datetime, timezone
+import os
+import shutil
 import struct
+import subprocess
+import tempfile
 import time
+import zlib
 from io import BytesIO
+from pathlib import Path
 
 from mcap.writer import CompressionType, Writer
 
@@ -57,8 +63,8 @@ def _image(stamp_ns, frame_id, rgb_or_depth, encoding, is_bigendian=0):
         step = width * 3
     elif encoding == "mono8":
         step = width
-    elif encoding == "32FC1":
-        step = width * 4
+    elif encoding in ("32FC1", "16UC1"):
+        step = width * (4 if encoding == "32FC1" else 2)
     else:
         raise ValueError(f"unsupported image encoding: {encoding}")
     data = image.tobytes()
@@ -90,6 +96,85 @@ def _compressed_image(stamp_ns, frame_id, rgb, quality=90):
         _sequence(buffer, payload, "B")
 
     return _cdr(serialize)
+
+
+def _split_annexb_access_units(data):
+    """按 H.264 AUD NAL 单元切分 FFmpeg 输出的 Annex-B 视频帧。"""
+    starts = []
+    index = 0
+    while index < len(data) - 4:
+        if data[index:index + 4] == b"\x00\x00\x00\x01":
+            starts.append((index, 4))
+            index += 4
+        elif data[index:index + 3] == b"\x00\x00\x01":
+            starts.append((index, 3))
+            index += 1
+        else:
+            index += 1
+    aud = [pos for pos, size in starts if (data[pos + size] & 0x1F) == 9]
+    if not aud:
+        raise RuntimeError("FFmpeg H.264 输出缺少 AUD，无法可靠映射逐帧时间戳")
+    return [data[start:aud[index + 1] if index + 1 < len(aud) else len(data)]
+            for index, start in enumerate(aud)]
+
+
+def _foxglove_video_packet(timestamp_ns, data):
+    """按 Foxglove ROS 2 消息定义封装一帧 Annex-B 码流。"""
+    sec, nsec = divmod(int(timestamp_ns), 1_000_000_000)
+
+    def serialize(buffer):
+        """关键帧由 NAL 类型识别，不额外写私有字段。"""
+        _pack(buffer, "iI", sec, nsec, alignment=4)
+        _string(buffer, "camera_color_optical_frame")
+        _pack(buffer, "I", len(data), alignment=4)
+        buffer.extend(data)
+        _string(buffer, "h264")
+
+    return _cdr(serialize)
+
+
+def _rgb_image(stamp_ns, frame_id, rgb):
+    """将 RGB 帧编码为 ROS 2 sensor_msgs/Image 的 rgb8 消息。"""
+    return _image(stamp_ns, frame_id, rgb, "rgb8")
+
+
+def _quantize_depth(depth, scale_m=0.01, invalid_value=0, far_clip_m=None):
+    """按米/整数比例量化深度，0 等无效值保留为配置的无效码。"""
+    import numpy as np
+
+    scale = float(scale_m)
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError("depth.scale_m 必须为有限正数")
+    if not 0 <= int(invalid_value) <= 65535:
+        raise ValueError("depth.invalid_value 必须位于 uint16 范围内")
+    values = np.asarray(depth, dtype=np.float64)
+    valid = np.isfinite(values) & (values > 0)
+    if far_clip_m is not None:
+        valid &= values <= float(far_clip_m)
+    encoded = np.full(values.shape, np.uint16(invalid_value), dtype=np.uint16)
+    scaled = np.rint(values[valid] / scale)
+    max_value = 65535 if invalid_value != 65535 else 65534
+    min_value = 1 if invalid_value == 0 else 0
+    if np.any(scaled < min_value) or np.any(scaled > max_value):
+        raise ValueError("深度值超出 uint16 量化范围")
+    codes = scaled.astype(np.uint16)
+    # 避开内部保留码时，选离原始值最近的相邻码，不能跳到量程端点。
+    collision = codes == invalid_value
+    prefer_lower = (invalid_value > 1) & (values[valid][collision] / scale < invalid_value)
+    codes[collision] = np.where(prefer_lower, max(1, invalid_value - 1),
+                                min(65535, invalid_value + 1)).astype(np.uint16)
+    encoded[valid] = codes
+    return encoded
+
+
+def _compressed_depth(depth):
+    """使用 D32Z 头和 zlib 无损编码 little-endian 米制 float32 深度。"""
+    import numpy as np
+
+    values = np.ascontiguousarray(depth, dtype="<f4")
+    height, width = values.shape[:2]
+    return struct.pack("<4sIII", b"D32Z", height, width, width * 4) + zlib.compress(
+        values.tobytes(), level=6)
 
 
 def _pose(stamp_ns, frame_id, position, xyzw):
@@ -197,23 +282,31 @@ def sanitize_depth(depth, far_m):
 
 
 def depth_preview(depth, min_m, max_m, encoding="mono8"):
-    """把米制深度映射为便于 Foxglove 直接查看的 8 位预览图。
-
-    该图仅用于可视化，不替代 ``/camera/depth`` 的精确深度。距离越近像素越暗，
-    超出配置范围的值会被截断到范围端点，从而避免 Foxglove 按 0～1 的默认范围
-    显示 ``32FC1`` 时整幅图看起来没有内容。
-    """
+    """将米制深度映射为灰度预览；无效值显示为最远，不用于测距。"""
     import numpy as np
 
-    if encoding != "mono8":
-        raise ValueError(f"暂不支持的深度预览编码: {encoding}")
     lower, upper = float(min_m), float(max_m)
-    if not np.isfinite(lower) or not np.isfinite(upper) or upper <= lower:
-        raise ValueError("深度预览范围必须是有限值，且 max_m 大于 min_m")
-    values = np.asarray(depth, dtype=np.float32)
-    values = np.nan_to_num(values, nan=upper, posinf=upper, neginf=lower)
-    normalized = np.clip((values - lower) / (upper - lower), 0.0, 1.0)
-    return np.rint(normalized * 255.0).astype(np.uint8)
+    if encoding != "mono8" or not np.isfinite([lower, upper]).all() or upper <= lower:
+        raise ValueError("深度预览只支持 mono8，且 max_m 必须大于有限的 min_m")
+    values = sanitize_depth(depth, upper)
+    return np.rint(np.clip((values - lower) / (upper - lower), 0, 1) * 255).astype(np.uint8)
+
+
+def mcap_camera_options(camera, fps):
+    """集中解析相机录制配置，同时接受已有的顶层 JPEG、预览和压缩选项。"""
+    options = camera.get("mcap", {})
+    rgb_options = options.get("rgb", {})
+    return {
+        "depth_far_clip_m": float(camera["far_m"]),
+        "jpeg_quality": rgb_options.get("quality", camera.get("jpeg_quality", 90)),
+        "rgb": {"encoding": rgb_options.get("encoding", "jpeg"),
+                "quality": rgb_options.get("quality", camera.get("jpeg_quality", 90)),
+                **rgb_options, "fps": float(fps)},
+        "depth": options.get("depth", {}),
+        "depth_preview": {**camera.get("depth_preview", {}), **options.get("depth_preview", {})},
+        "depth_compression": {**camera.get("depth_compression", {}),
+                              **options.get("depth_compression", {})},
+    }
 
 
 class NavigationMcapWriter:
@@ -302,25 +395,62 @@ uint32 width
 bool do_rectify
 """,
         "wanda_nav.TrajectoryTags": "binary FileDescriptorSet",
+        "foxglove_msgs/msg/CompressedVideo": """builtin_interfaces/Time timestamp
+string frame_id
+uint8[] data
+string format
+================================================================================
+MSG: builtin_interfaces/Time
+int32 sec
+uint32 nanosec
+""",
     }
 
     def __init__(self, path, trajectory_id, camera, metadata=None, start_time_ns=None,
                  tags=None):
         """初始化带 ROS2 标准消息、有效时间戳和 ZSTD 压缩的 MCAP 写入器。"""
-        self.path = path
+        import numpy as np
+
+        self.path = Path(path)
         self.trajectory_id = trajectory_id
         self.tags = list(tags or [])
         self.camera = camera
-        self.jpeg_quality = int((metadata or {}).get("jpeg_quality", 90))
+        options = metadata or {}
+        self.rgb_config = options.get("rgb", {})
+        self.depth_config = options.get("depth", {})
+        self.rgb_encoding = str(self.rgb_config.get("encoding", "jpeg")).lower()
+        if self.rgb_encoding not in ("jpeg", "h264"):
+            raise ValueError("rgb.encoding 只支持 jpeg 或 h264")
+        self.jpeg_quality = int(self.rgb_config.get("quality", options.get("jpeg_quality", 90)))
         if not 1 <= self.jpeg_quality <= 100:
             raise ValueError("jpeg_quality 必须位于 1 到 100 之间")
-        self.depth_far_clip_m = float((metadata or {}).get("depth_far_clip_m", 500.0))
+        self.depth_encoding = str(self.depth_config.get("encoding", "32FC1")).upper()
+        if self.depth_encoding not in ("32FC1", "16UC1"):
+            raise ValueError("depth.encoding 只支持 32FC1 或 16UC1")
+        self.depth_scale_m = float(self.depth_config.get("scale_m", 0.01))
+        self.depth_invalid_value = int(self.depth_config.get("invalid_value", 0))
+        if self.depth_encoding == "16UC1":
+            _quantize_depth(np.zeros((1, 1), dtype=np.float32), self.depth_scale_m,
+                            self.depth_invalid_value)
+        self.depth_far_clip_m = float(options.get("depth_far_clip_m", 500.0))
+        self.video_crf = int(self.rgb_config.get("crf", 23))
+        self.video_preset = str(self.rgb_config.get("preset", "fast"))
+        self.video_gop = int(self.rgb_config.get("keyframe_interval", 30))
+        self.video_fps = float(self.rgb_config.get("fps", 10.0))
+        if not 0 <= self.video_crf <= 51:
+            raise ValueError("rgb.crf 必须位于 0 到 51 之间")
+        if self.video_gop <= 0 or not np.isfinite(self.video_fps) or self.video_fps <= 0:
+            raise ValueError("rgb.keyframe_interval 和 rgb.fps 必须为正数")
         self.start_time_ns = (int(start_time_ns) if start_time_ns is not None
                               else time.time_ns())
         self.started_utc = (datetime.fromtimestamp(self.start_time_ns // 1_000_000_000, timezone.utc)
                             if start_time_ns is not None
                             else datetime.now(timezone.utc))
-        self.stream = open(path, "wb")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, self._partial_path = tempfile.mkstemp(
+            prefix=f".{self.path.name}.", suffix=".partial", dir=self.path.parent)
+        self.stream = os.fdopen(fd, "wb")
+        self._closed = False
         self.writer = Writer(self.stream, compression=CompressionType.ZSTD)
         self.writer.start(profile="ros2", library="wanda-nav")
         self.channels = {}
@@ -330,8 +460,10 @@ bool do_rectify
             data = (_trajectory_tags_descriptor() if encoding == "protobuf"
                     else text.encode("utf-8"))
             self.schemas[name] = self.writer.register_schema(name, encoding, data)
+        rgb_name = ("sensor_msgs/CompressedImage" if self.rgb_encoding == "jpeg"
+                    else "foxglove_msgs/msg/CompressedVideo")
         for topic, name, encoding, ros2_type in (
-            ("/camera/rgb", "sensor_msgs/CompressedImage", "cdr", "sensor_msgs/msg/CompressedImage"),
+            ("/camera/rgb", rgb_name, "cdr", "sensor_msgs/msg/CompressedImage" if self.rgb_encoding == "jpeg" else "foxglove_msgs/msg/CompressedVideo"),
             ("/camera/depth", "sensor_msgs/Image", "cdr", "sensor_msgs/msg/Image"),
             ("/camera/info", "sensor_msgs/CameraInfo", "cdr", "sensor_msgs/msg/CameraInfo"),
             ("/trajectory/pose", "geometry_msgs/PoseStamped", "cdr", "geometry_msgs/msg/PoseStamped"),
@@ -341,37 +473,49 @@ bool do_rectify
                 topic, encoding, self.schemas[name],
                 ({"ros2_type": ros2_type} if encoding == "cdr" else {}),
             )
-        self.depth_preview_config = (metadata or {}).get("depth_preview", {})
+        self.depth_preview_config = options.get("depth_preview", {})
         self.depth_preview_enabled = bool(self.depth_preview_config.get("enabled", True))
         self.depth_preview_min_m = float(self.depth_preview_config.get("min_m", 0.0))
         self.depth_preview_max_m = float(self.depth_preview_config.get("max_m", 20.0))
         self.depth_preview_encoding = str(self.depth_preview_config.get("encoding", "mono8"))
+        self.depth_compression_enabled = bool(options.get("depth_compression", {}).get("enabled", False))
         if self.depth_preview_enabled:
             self.channels["/camera/depth_preview"] = self.writer.register_channel(
                 "/camera/depth_preview", "cdr", self.schemas["sensor_msgs/Image"],
-                {"ros2_type": "sensor_msgs/msg/Image"},
-            )
+                {"ros2_type": "sensor_msgs/msg/Image"})
+        if self.depth_compression_enabled:
+            schema_id = self.writer.register_schema(
+                "wanda_nav/CompressedDepth", "binary",
+                b"D32Z: magic[4], height:uint32, width:uint32, stride:uint32, zlib(float32_le[H,W])")
+            self.channels["/camera/depth_compressed"] = self.writer.register_channel(
+                "/camera/depth_compressed", "bytes", schema_id,
+                {"format": "D32Z", "encoding": "32FC1", "compression": "zlib"})
         self.sequence = 0
         self._metadata_channel = None
         metadata_schema = self.writer.register_schema("NavigationMetadata", "jsonschema",
             json.dumps({"type": "object"}, separators=(",", ":")).encode("utf-8"))
         self._metadata_channel = self.writer.register_channel(
             "/trajectory/metadata", "json", metadata_schema)
-        self.add_json(self.timestamp_ns(0), {"trajectory_id": trajectory_id,
+        self.add_json(self.timestamp_ns(0), {**(metadata or {}),
+                          "trajectory_id": trajectory_id,
                           "coordinate_frame": "Y-up", "position_unit": "m",
                           "orientation_format": "xyzw",
                           "timestamp_source": "UTC generation start + simulation time",
                           "generation_start_utc": self.started_utc.isoformat(),
-                          "depth_encoding": "32FC1", "depth_unit": "m",
-                          "depth_invalid_value": float((metadata or {}).get("depth_far_clip_m", 500.0)),
-                          "depth_preview": {
-                              "enabled": self.depth_preview_enabled,
-                              "min_m": self.depth_preview_min_m,
-                              "max_m": self.depth_preview_max_m,
-                              "encoding": self.depth_preview_encoding,
-                              "note": "仅用于可视化，不是可测量的原始深度",
-                          },
-                          **(metadata or {})})
+                          "rgb": {"encoding": self.rgb_encoding,
+                                  "codec": "h264" if self.rgb_encoding == "h264" else "jpeg",
+                                  "crf": self.video_crf if self.rgb_encoding == "h264" else None,
+                                  "fps": self.video_fps if self.rgb_encoding == "h264" else None},
+                          "depth": {"encoding": self.depth_encoding,
+                                    "scale_m": self.depth_scale_m if self.depth_encoding == "16UC1" else 1.0,
+                                    "unit": "m",
+                                    "invalid_value": self.depth_invalid_value if self.depth_encoding == "16UC1" else None,
+                                    "depth_compression": self.depth_compression_enabled},
+                          "depth_preview": {"enabled": self.depth_preview_enabled,
+                                            "min_m": self.depth_preview_min_m,
+                                            "max_m": self.depth_preview_max_m,
+                                            "encoding": self.depth_preview_encoding},
+                          })
 
     def timestamp_ns(self, simulation_seconds):
         """把相对模拟时间转换为路线开始时刻起算的 Unix 纳秒时间戳。"""
@@ -386,20 +530,55 @@ bool do_rectify
 
     def add_frame(self, timestamp_ns, rgb, depth, position, xyzw, index):
         """按同一时间戳写入 RGB、有限值深度和相机位姿。"""
-        depth = sanitize_depth(depth, self.depth_far_clip_m)
-        messages = (
-            ("/camera/rgb", _compressed_image(timestamp_ns, "camera_color_optical_frame", rgb,
-                                               self.jpeg_quality)),
-            ("/camera/depth", _image(timestamp_ns, "camera_depth_optical_frame", depth, "32FC1")),
-            ("/trajectory/pose", _pose(timestamp_ns, "world", position, xyzw)),
-        )
+        import numpy as np
+
+        depth = np.asarray(depth, dtype=np.float32)
+        if self.depth_encoding == "16UC1":
+            depth_data = _quantize_depth(depth, self.depth_scale_m, self.depth_invalid_value,
+                                         self.depth_far_clip_m)
+        else:
+            depth_data = sanitize_depth(depth, self.depth_far_clip_m)
+        if self.rgb_encoding == "h264":
+            if not hasattr(self, "_rgb_temp"):
+                self._rgb_temp = tempfile.NamedTemporaryFile(prefix="wanda-mcap-rgb-", suffix=".rgb")
+                self._rgb_shape = tuple(rgb.shape)
+                height, width = self._rgb_shape[:2]
+                ffmpeg = shutil.which("ffmpeg")
+                if ffmpeg is None:
+                    raise RuntimeError("RGB H.264 编码需要可执行的 ffmpeg")
+                self._video_process = subprocess.Popen(
+                    [ffmpeg, "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
+                     "-video_size", f"{width}x{height}", "-framerate", str(self.video_fps),
+                     "-i", "pipe:0", "-an", "-c:v", "libx264", "-preset", self.video_preset,
+                     "-crf", str(self.video_crf), "-g", str(self.video_gop), "-bf", "0",
+                     "-x264-params", "aud=1:repeat-headers=1", "-pix_fmt", "yuv420p", "-f", "h264",
+                     "pipe:1"], stdin=subprocess.PIPE, stdout=self._rgb_temp,
+                    stderr=subprocess.PIPE)
+                self._rgb_timestamps = []
+            if tuple(rgb.shape) != self._rgb_shape:
+                raise ValueError("H.264 编码期间 RGB 帧尺寸不可变化")
+            self._video_process.stdin.write(np.ascontiguousarray(rgb, dtype=np.uint8).tobytes())
+            self._rgb_timestamps.append(int(timestamp_ns))
+        else:
+            message = (_compressed_image(timestamp_ns, "camera_color_optical_frame", rgb,
+                                         self.jpeg_quality)
+                       if self.rgb_encoding == "jpeg"
+                       else _rgb_image(timestamp_ns, "camera_color_optical_frame", rgb))
+            self.writer.add_message(self.channels["/camera/rgb"], timestamp_ns,
+                                    message, timestamp_ns, self.sequence)
+            self.sequence += 1
+        depth_message = _image(timestamp_ns, "camera_depth_optical_frame", depth_data,
+                                self.depth_encoding)
+        messages = (("/camera/depth", depth_message),
+                    ("/trajectory/pose", _pose(timestamp_ns, "world", position, xyzw)))
         if self.depth_preview_enabled:
             preview = depth_preview(depth, self.depth_preview_min_m,
-                                    self.depth_preview_max_m,
-                                    self.depth_preview_encoding)
+                                    self.depth_preview_max_m, self.depth_preview_encoding)
             messages += (("/camera/depth_preview",
                           _image(timestamp_ns, "camera_depth_optical_frame", preview,
                                  self.depth_preview_encoding)),)
+        if self.depth_compression_enabled:
+            messages += (("/camera/depth_compressed", _compressed_depth(depth)),)
         for topic, data in messages:
             self.writer.add_message(self.channels[topic], timestamp_ns, data,
                                     timestamp_ns, self.sequence)
@@ -412,11 +591,71 @@ bool do_rectify
 
     def finish(self):
         """追加调用方提供的路线标签并结束 MCAP 文件。"""
-        tags = _protobuf_string(1, self.trajectory_id)
-        for tag in self.tags:
-            tags += _protobuf_string(2, tag)
-        timestamp_ns = self.timestamp_ns(0)
-        self.writer.add_message(self.channels["/trajectory/tags"], timestamp_ns,
-                                tags, timestamp_ns, self.sequence)
-        self.writer.finish()
-        self.stream.close()
+        if self._closed:
+            return
+        try:
+            if self.rgb_encoding == "h264" and hasattr(self, "_rgb_temp"):
+                self._video_process.stdin.close()
+                stderr = self._video_process.stderr.read()
+                if self._video_process.wait() != 0:
+                    raise RuntimeError(f"FFmpeg H.264 编码失败：{stderr.decode(errors='replace')}")
+                self._video_process.stderr.close()
+                self._rgb_temp.seek(0)
+                packets = _split_annexb_access_units(self._rgb_temp.read())
+                if len(packets) != len(self._rgb_timestamps):
+                    raise RuntimeError(f"H.264 帧数不匹配：{len(packets)} != {len(self._rgb_timestamps)}")
+                for timestamp_ns, packet in zip(self._rgb_timestamps, packets):
+                    message = _foxglove_video_packet(timestamp_ns, packet)
+                    self.writer.add_message(self.channels["/camera/rgb"], timestamp_ns,
+                                            message, timestamp_ns, self.sequence)
+                    self.sequence += 1
+                self._rgb_temp.close()
+                self._rgb_temp = None
+            tags = _protobuf_string(1, self.trajectory_id)
+            for tag in self.tags:
+                tags += _protobuf_string(2, tag)
+            timestamp_ns = self.timestamp_ns(0)
+            self.writer.add_message(self.channels["/trajectory/tags"], timestamp_ns,
+                                    tags, timestamp_ns, self.sequence)
+            self.writer.finish()
+            self.stream.close()
+            os.replace(self._partial_path, self.path)
+            self._closed = True
+        except Exception:
+            self.abort()
+            raise
+
+    def abort(self):
+        """中止录制并可靠回收 FFmpeg、临时帧文件及 MCAP 文件。"""
+        if getattr(self, "_closed", False):
+            return
+        process = getattr(self, "_video_process", None)
+        if process is not None and process.poll() is None:
+            if process.stdin and not process.stdin.closed:
+                process.stdin.close()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+        if process is not None:
+            if process.stdin and not process.stdin.closed:
+                process.stdin.close()
+            if process.stderr and not process.stderr.closed:
+                process.stderr.close()
+            if process.stdout and not process.stdout.closed:
+                process.stdout.close()
+        rgb_temp = getattr(self, "_rgb_temp", None)
+        if rgb_temp is not None:
+            if not rgb_temp.closed:
+                rgb_temp.close()
+            os.unlink(rgb_temp.name) if os.path.exists(rgb_temp.name) else None
+        if not self.stream.closed:
+            self.stream.close()
+        if os.path.exists(self._partial_path):
+            os.unlink(self._partial_path)
+        self._closed = True

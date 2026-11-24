@@ -20,7 +20,8 @@ from src.visualization import (topdown_plots, save_gaussian_navmesh_overlay,
                             render_ground_sliced_gaussian_topdown)
 from src.avoidance import (add_render_obstacle, composite_obstacle_rgb,
                         plan_around_synthetic_obstacle)
-from src.mcap_output import NavigationMcapWriter, depth_preview, sanitize_depth
+from src.mcap_output import NavigationMcapWriter, mcap_camera_options, sanitize_depth
+from src.output_manifest import build_route_manifest, write_json_atomic
 from src.motion_primitives import classify_trajectory_tags
 
 
@@ -266,10 +267,9 @@ def run_one(args, config, render_sim=None):
                         "camera_height_m": float(config["motion"]["camera_height_m"]),
                         "linear_speed_mps": float(config["motion"]["linear_speed_mps"]),
                         "angular_speed_radps": float(config["motion"]["angular_speed_radps"]),
-                        "depth_far_clip_m": float(camera["far_m"]),
-                        "jpeg_quality": int(camera.get("jpeg_quality", 90)),
-                        "depth_preview": config["camera"].get("depth_preview", {}),
+                        **mcap_camera_options(camera, config["motion"]["fps"]),
                     }, tags=trajectory_tags)
+            recording_succeeded = False
             try:
                 for index, (position, yaw, timestamp) in enumerate(frames):
                     state = hs.AgentState(); state.position = mn.Vector3(*position.tolist()); state.rotation = yaw_quaternion(yaw)
@@ -296,27 +296,27 @@ def run_one(args, config, render_sim=None):
                         if depth.ndim == 3:
                             depth = depth[..., 0]
                         # 以相机远裁剪距离填补空洞，并钳制远裁剪面外值。
-                        depth = sanitize_depth(depth, camera["far_m"])
+                        if mcap_writer.depth_encoding == "32FC1":
+                            depth = sanitize_depth(depth, camera["far_m"])
                         if (config["output"].get("depth_keyframes", False)
                                 and index == 0):
-                            preview_config = camera.get("depth_preview", {})
-                            depth_image = depth_preview(
-                                depth,
-                                preview_config.get("min_m", 0.0),
-                                preview_config.get("max_m", 20.0),
-                                preview_config.get("encoding", "mono8"))
-                            Image.fromarray(depth_image).save(
-                                output_dir / "depth_0000.png")
+                            Image.fromarray(depth).save(output_dir / "depth_0000.tiff")
                         stamp_ns = mcap_writer.timestamp_ns(timestamp)
                         mcap_writer.add_frame(stamp_ns, rgb, depth,
                                               camera_position, frame_records[-1]["xyzw"], index)
                     if index % 100 == 0:
                         print(f"Rendered {index}/{len(frames)} frames", flush=True)
+                recording_succeeded = True
             finally:
-                if writer_context:
-                    writer_context.close()
-                if mcap_writer is not None:
-                    mcap_writer.finish()
+                try:
+                    if writer_context:
+                        writer_context.close()
+                finally:
+                    if mcap_writer is not None:
+                        if recording_succeeded:
+                            mcap_writer.finish()
+                        else:
+                            mcap_writer.abort()
                 if render_obstacle is not None:
                     obstacle_object, obstacle_mesh = render_obstacle
                     sim.get_rigid_object_manager().remove_object_by_id(obstacle_object.object_id)
@@ -369,6 +369,8 @@ def run_one(args, config, render_sim=None):
         report["preparation"] = json.loads(preparation_file.read_text(encoding="utf-8"))
     if config["output"].get("validation_json", True):
         (output_dir / "validation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(output_dir / "manifest.json",
+                      build_route_manifest(output_dir, config, report))
     print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
 
 

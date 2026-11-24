@@ -8,6 +8,7 @@ import traceback
 import yaml
 from src.planning import load_config, resolve_path
 from src.pipeline import run_one
+from src.output_manifest import config_digest, write_batch_manifest
 import habitat_sim as hs
 import magnum as mn
 
@@ -37,16 +38,28 @@ def required_route_outputs(output_config, navigation_config=None):
 
 def is_route_complete(route_dir, report, config):
     """判断路线是否可续跑跳过，避免关闭视频时仍要求 RGB 帧统计。"""
+    route_dir = Path(route_dir)
     output_config = config["output"]
-    if report.get("config") != config and not (Path(route_dir) / "effective_config.yaml").is_file():
+    if output_config.get("mcap", False):
+        name = f"trajectory_{route_dir.name}.mcap"
+        try:
+            manifest = json.loads((route_dir / "manifest.json").read_text(encoding="utf-8"))
+            size = (route_dir / name).stat().st_size
+            if (manifest.get("schema_version") != 1 or manifest.get("mcap") != name
+                    or manifest.get("config_sha256") != config_digest(config)
+                    or size <= 0 or not any(item["path"] == name and item["size_bytes"] == size
+                                           for item in manifest["artifacts"])):
+                return False
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return False
+    elif report.get("config") != config and not (route_dir / "effective_config.yaml").is_file():
         return False
     if (output_config.get("validation_json", True)
             and output_config.get("video", True) and report.get("rgb_frames", 0) <= 0):
         return False
     if output_config.get("poses_json", True):
         try:
-            import json
-            pose_data = json.loads((Path(route_dir) / "navigation_poses.json").read_text(encoding="utf-8"))
+            pose_data = json.loads((route_dir / "navigation_poses.json").read_text(encoding="utf-8"))
             endpoints = (pose_data["route"]["start"], pose_data["route"]["goal"])
             if (any("agent_position" in endpoint or "camera_position" in endpoint
                     or set(endpoint) != {"position", "xyzw"}
@@ -90,6 +103,7 @@ def effective_config_text(config_path, config):
 
 
 def main():
+    """读取批次参数、复用已完成路线并更新批次索引。"""
     parser = argparse.ArgumentParser(description=__doc__)
     project_root = Path(__file__).resolve().parents[1]
     parser.add_argument('--config', type=Path, default=project_root / 'configs' / 'default.yaml')
@@ -171,6 +185,7 @@ def main():
         sensors.append(topdown)
     agent.sensor_specifications = sensors
     pending = []
+    route_dirs = []
     for index in range(count):
         current = copy.deepcopy(config)
         current['navigation']['seed'] += index
@@ -179,16 +194,17 @@ def main():
         current['generation']['batch_index'] = int(index)
         run_args = copy.copy(args)
         run_args.output = args.output / f'route_{index:04d}'
+        route_dirs.append(run_args.output)
         # 批次使用同一份已验证 NavMesh；外部预先烘焙可避免反复初始化模拟器。
         run_args.skip_bake = True
         run_args.output.mkdir(parents=True, exist_ok=True)
         done_file = run_args.output / 'validation.json'
         report = json.loads(done_file.read_text()) if done_file.exists() else {}
-        required = required_route_outputs(current['output'], current.get('navigation'))
         if (not args.force and not (run_args.output / 'failure.json').exists()
                 and is_route_complete(run_args.output, report, current)):
             print(f'[{index + 1}/{count}] skip completed {run_args.output}', flush=True)
             continue
+        (run_args.output / 'manifest.json').unlink(missing_ok=True)
         # 每条结果保存实际生效配置，便于复现实验及查看可视化参数。
         (run_args.output / 'effective_config.yaml').write_text(
             effective_config_text(args.config, current), encoding='utf-8')
@@ -201,12 +217,16 @@ def main():
                     run_one(run_args, current, render_sim=sim)
                     (run_args.output / 'failure.json').unlink(missing_ok=True)
                 except Exception as error:
+                    manifest_path = run_args.output / 'manifest.json'
+                    if manifest_path.exists():
+                        manifest_path.unlink()
                     failure = {'trajectory_index': index, 'output': str(run_args.output),
                                'error': repr(error), 'traceback': traceback.format_exc()}
                     failures.append(failure)
                     (run_args.output / 'failure.json').write_text(
                         json.dumps(failure, ensure_ascii=False, indent=2), encoding='utf-8')
                     print(f'[{index + 1}/{count}] FAILED: {error}', flush=True)
+    write_batch_manifest(args.output, route_dirs)
     if failures:
         (args.output / 'failures.json').write_text(
             json.dumps(failures, ensure_ascii=False, indent=2), encoding='utf-8')
