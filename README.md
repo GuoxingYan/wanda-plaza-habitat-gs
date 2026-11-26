@@ -135,6 +135,10 @@ Python 源码按你的目录要求直接放在 `src/`，没有额外的 `src/wan
 
 曲线标签只对生成器记录的弧线掉头、切向弧线和 S 弯事件判定；原地转向单独标为 `in_place_rotation_*`。没有达到判定阈值的类别不会写入，因而标签列表可能为空。
 
+## 动态行人验证
+
+万达 Habitat-GS 场景中的 SMPL-X 动态行人接入和双人碰撞实验见 [动态行人验证说明](docs/dynamic-pedestrians.md)。仓库提供代理胶囊距离检测与 driver 校验；Habitat-GS、SMPL-X、场景资产及端到端渲染输出均需在本机准备，实验复现记录保留在被忽略的 `.scratch/wanda-gamma/`。
+
 批量结果的 HTML 汇总保存在相应输出目录（例如 `outputs/ackermann-50/summary.html`），属于本地输出，不会随仓库发布。
 
 ## 版本
